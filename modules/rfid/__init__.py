@@ -236,13 +236,12 @@ class RC522Reader(RFIDReader):
                 self._stop_crypto()
                 return None
 
-            from mfrc522 import MFRC522
-            status, data_out = self._mfrc522.MFRC522_Read(block)
+            data_out = self._mfrc522.MFRC522_Read(block)
             self._stop_crypto()
 
-            if status == MFRC522.MI_OK and data_out:
+            if data_out and len(data_out) == 16:
                 return bytes(data_out[:16])
-            logger.error(f"Read block {block} failed (status={status})")
+            logger.error(f"Read block {block} failed (no data returned)")
             return None
         except Exception as exc:
             logger.error(f"read_block error: {exc}")
@@ -283,15 +282,10 @@ class RC522Reader(RFIDReader):
                 self._stop_crypto()
                 return False
 
-            from mfrc522 import MFRC522
-            status = self._mfrc522.MFRC522_Write(block, list(data))
+            self._mfrc522.MFRC522_Write(block, list(data))
             self._stop_crypto()
-
-            if status == MFRC522.MI_OK:
-                logger.info(f"Block {block} written successfully")
-                return True
-            logger.error(f"Write block {block} failed (status={status})")
-            return False
+            logger.info(f"Block {block} written successfully")
+            return True
         except Exception as exc:
             logger.error(f"write_block error: {exc}")
             self._stop_crypto()
@@ -336,8 +330,8 @@ class RC522Reader(RFIDReader):
                 for blk_offset in range(BLOCKS_PER_SECTOR):
                     block = sector * BLOCKS_PER_SECTOR + blk_offset
                     if auth_ok:
-                        status, blk_data = self._mfrc522.MFRC522_Read(block)
-                        if status == MFRC522.MI_OK and blk_data:
+                        blk_data = self._mfrc522.MFRC522_Read(block)
+                        if blk_data and len(blk_data) == 16:
                             sector_data.append(list(blk_data[:16]))
                         else:
                             sector_data.append(None)
@@ -432,10 +426,7 @@ class RC522Reader(RFIDReader):
                         continue
                     if blk_data is None:
                         continue
-                    status = self._mfrc522.MFRC522_Write(block, blk_data[:16])
-                    if status != MFRC522.MI_OK:
-                        logger.warning(f"Write failed on block {block}")
-                        errors += 1
+                    self._mfrc522.MFRC522_Write(block, blk_data[:16])
 
             self._stop_crypto()
             if errors:
