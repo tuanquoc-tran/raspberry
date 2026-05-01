@@ -1,0 +1,207 @@
+# RaspFlip Configuration File
+# Copy this to config.yaml and modify as needed
+
+# Hardware configuration
+hardware:
+  # RFID/NFC Module
+  rfid:
+    enabled: true
+    type: rc522  # Options: rc522, pn532
+    spi_bus: 0
+    spi_device: 0
+  
+  # Sub-GHz Radio Module
+  subghz:
+    enabled: false
+    type: cc1101
+    default_frequency: 433.92  # MHz
+    max_power: 10  # dBm
+    allowed_frequencies:
+      - 315.0
+      - 433.92
+      - 868.35
+      - 915.0
+  
+  # Infrared Module
+  ir:
+    enabled: true
+    rx_pin: 23  # GPIO pin for IR receiver
+    tx_pin: 18  # GPIO pin for IR transmitter
+    carrier_frequency: 38000  # Hz
+  
+  # BadUSB Module (Pi Zero only)
+  badusb:
+    enabled: false
+    hid_device: /dev/hidg0
+    default_delay: 50  # ms between keystrokes
+  
+  # GPIO Module
+  gpio:
+    enabled: true
+    mode: BCM  # BCM or BOARD numbering
+  
+  # Display
+  display:
+    enabled: false
+    type: ssd1306  # Options: ssd1306, tft
+    i2c_address: 0x3C
+    width: 128
+    height: 64
+  
+  # Input Controls
+  input:
+    rotary_encoder:
+      enabled: false
+      clk_pin: 17
+      dt_pin: 27
+      sw_pin: 22
+    buttons:
+      enabled: false
+      button1_pin: 5
+      button2_pin: 6
+      button3_pin: 13
+      button4_pin: 19
+
+# Application settings
+app:
+  name: RaspFlip
+  version: 0.1.0
+  debug: false
+  
+  # User interface
+  ui:
+    theme: dark  # Options: dark, light
+    menu_style: table  # Options: table, list
+    show_banner: true
+  
+  # Logging
+  logging:
+    level: INFO  # Options: DEBUG, INFO, WARNING, ERROR
+    file: logs/raspflip.log
+    max_size: 10485760  # 10MB
+    backup_count: 5
+    console_output: true
+
+# File paths
+paths:
+  dumps: dumps/
+  captures: captures/
+  payloads: payloads/
+  databases: databases/
+  logs: logs/
+  temp: tmp/
+
+# Security settings
+security:
+  # Require confirmation for dangerous operations
+  confirm_write: true
+  confirm_transmit: true
+  confirm_badusb: true
+  
+  # Log all operations
+  log_all_operations: true
+  
+  # Maximum file sizes (bytes)
+  max_dump_size: 1048576  # 1MB
+  max_capture_size: 10485760  # 10MB
+
+# RFID/NFC settings
+rfid:
+  # Auto-save read cards
+  auto_save: true
+  save_path: dumps/rfid/
+  
+  # Card types to support
+  supported_types:
+    - MIFARE Classic
+    - MIFARE Ultralight
+    - NTAG
+    - ISO14443A
+    - ISO15693
+
+# Sub-GHz settings
+subghz:
+  # Signal capture settings
+  capture_timeout: 30  # seconds
+  auto_detect_protocol: true
+  
+  # Protocols to decode
+  protocols:
+    - PT2260
+    - PT2262
+    - EV1527
+    - HT12
+
+# IR settings
+ir:
+  # Capture settings
+  capture_timeout: 10  # seconds
+  
+  # Protocols to decode
+  protocols:
+    - NEC
+    - RC5
+    - RC6
+    - SONY
+    - SAMSUNG
+    - LG
+  
+  # Auto-save captured signals
+  auto_save: true
+  save_path: databases/ir/
+
+# BadUSB settings
+badusb:
+  # Safety delays (ms)
+  delay_between_keys: 50
+  delay_after_special: 100
+  
+  # Payload settings
+  payload_path: payloads/badusb/
+  
+  # Safety features
+  require_confirmation: true
+  test_mode: false  # If true, log without executing
+
+# Wi-Fi settings (future)
+wifi:
+  enabled: false
+  monitor_mode: false
+  interface: wlan0
+
+# Bluetooth settings (future)
+bluetooth:
+  enabled: false
+  scan_duration: 30  # seconds
+  device_name: RaspFlip
+
+# Network settings
+network:
+  # API server (future)
+  api:
+    enabled: false
+    host: 127.0.0.1
+    port: 8080
+  
+  # Web interface (future)
+  web:
+    enabled: false
+    port: 8000
+
+# Database settings
+database:
+  # IR code database
+  ir_database: databases/ir/codes.json
+  
+  # RFID card database
+  rfid_database: databases/rfid/cards.json
+
+# Experimental features
+experimental:
+  # Enable experimental modules
+  enabled: false
+  
+  # Beta features
+  features:
+    - ml_signal_classification
+    - advanced_protocol_analysis

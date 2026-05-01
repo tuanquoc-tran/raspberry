@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Virtual Environment
+raspflip-env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Raspberry Pi specific
+*.img
+*.dump
+*.bin
+
+# Credentials & Keys
+*.key
+*.pem
+secrets/
+.env
+
+# Hardware dumps
+dumps/
+captures/
+*.cap
+*.pcap
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
