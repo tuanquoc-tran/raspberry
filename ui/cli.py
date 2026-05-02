@@ -32,12 +32,13 @@ def main_menu():
         table.add_row("7", "Bluetooth", "Bluetooth scanning and analysis")
         table.add_row("8", "iButton", "Read and clone iButton keys")
         table.add_row("9", "Settings", "Configure hardware and software")
+        table.add_row("10", "Flash/Chip", "Read, write, clone SPI/STM32/AVR/I2C chips")
         table.add_row("0", "Exit", "Exit RaspFlip")
         
         console.print(table)
         console.print()
         
-        choice = Prompt.ask("Select option", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
+        choice = Prompt.ask("Select option", choices=["0","1","2","3","4","5","6","7","8","9","10"])
         
         if choice == "0":
             break
@@ -56,8 +57,7 @@ def main_menu():
             console.print("[yellow]GPIO module - Coming soon![/yellow]")
             Prompt.ask("Press Enter to continue")
         elif choice == "6":
-            console.print("[yellow]Wi-Fi module - Coming soon![/yellow]")
-            Prompt.ask("Press Enter to continue")
+            wifi_menu()
         elif choice == "7":
             console.print("[yellow]Bluetooth module - Coming soon![/yellow]")
             Prompt.ask("Press Enter to continue")
@@ -66,6 +66,8 @@ def main_menu():
             Prompt.ask("Press Enter to continue")
         elif choice == "9":
             settings_menu()
+        elif choice == "10":
+            flash_menu()
 
 def rfid_menu():
     """RFID/NFC module menu"""
@@ -305,3 +307,689 @@ def settings_menu():
         else:
             console.print("[yellow]Function not yet implemented[/yellow]")
             Prompt.ask("Press Enter to continue")
+
+
+# ---------------------------------------------------------------------------
+# Wi-Fi menu
+# ---------------------------------------------------------------------------
+
+def wifi_menu():
+    """Wi-Fi module menu"""
+    from modules.wifi import WiFiManager, signal_to_quality, encryption_risk
+
+    mgr = WiFiManager('wlan0')
+
+    while True:
+        console.clear()
+        t = Table(title="Wi-Fi Module", show_header=True, header_style="bold cyan")
+        t.add_column("Option", style="cyan", width=8)
+        t.add_column("Action", style="white")
+        t.add_row("1", "Interface info")
+        t.add_row("2", "Scan networks")
+        t.add_row("3", "Channel analysis")
+        t.add_row("4", "Network / IP info")
+        t.add_row("5", "Connection status (wpa_supplicant)")
+        t.add_row("6", "Saved networks")
+        t.add_row("7", "Connect to network")
+        t.add_row("8", "Signal monitor (live)")
+        t.add_row("9", "Hardware capabilities")
+        t.add_row("10", "Show saved passwords")
+        t.add_row("0", "Back")
+        console.print(t)
+        console.print()
+
+        choice = Prompt.ask("Select option",
+                            choices=["0","1","2","3","4","5","6","7","8","9","10"])
+        if choice == "0":
+            break
+        elif choice == "1":
+            _wifi_iface_info(mgr)
+        elif choice == "2":
+            _wifi_scan(mgr, signal_to_quality, encryption_risk)
+        elif choice == "3":
+            _wifi_channel_analysis(mgr)
+        elif choice == "4":
+            _wifi_network_info(mgr)
+        elif choice == "5":
+            _wifi_conn_status(mgr)
+        elif choice == "6":
+            _wifi_saved_networks(mgr)
+        elif choice == "7":
+            _wifi_connect(mgr)
+        elif choice == "8":
+            _wifi_signal_monitor(mgr, signal_to_quality)
+        elif choice == "9":
+            _wifi_capabilities(mgr)
+        elif choice == "10":
+            _wifi_saved_passwords(mgr)
+
+
+# -----------------------------------------------------------------------
+# Wi-Fi helpers
+# -----------------------------------------------------------------------
+
+def _wifi_iface_info(mgr):
+    info = mgr.get_interface_info()
+    if not info:
+        console.print("[red]Could not read interface info.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(show_header=False, box=None)
+    t.add_column("Key", style="bold green")
+    t.add_column("Value")
+    t.add_row("Interface",  info.iface)
+    t.add_row("MAC",        info.mac)
+    t.add_row("State",      f"[green]{info.state}[/green]" if info.state == 'UP'
+                             else f"[red]{info.state}[/red]")
+    t.add_row("Mode",       info.mode)
+    t.add_row("SSID",       info.ssid or '—')
+    t.add_row("BSSID",      info.bssid or '—')
+    t.add_row("Channel",    str(info.channel) if info.channel else '—')
+    t.add_row("Frequency",  f"{info.frequency_mhz} MHz" if info.frequency_mhz else '—')
+    t.add_row("TX Power",   f"{info.txpower_dbm} dBm" if info.txpower_dbm else '—')
+    t.add_row("Bit Rate",   f"{info.bitrate_mbps} Mb/s" if info.bitrate_mbps else '—')
+    t.add_row("Signal",     f"{info.signal_dbm} dBm" if info.signal_dbm else '—')
+    t.add_row("IP",         info.ip or '—')
+    t.add_row("RF-kill soft", "[red]YES[/red]" if info.rfkill_soft else "no")
+    t.add_row("RF-kill hard", "[red]YES[/red]" if info.rfkill_hard else "no")
+    console.print(Panel(t, title="Interface Info", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_scan(mgr, signal_to_quality, encryption_risk):
+    console.print("[cyan]Scanning… (requires sudo)[/cyan]")
+    networks = mgr.scan()
+    if networks is None:
+        console.print("[red]Scan failed. Try running with sudo.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    if not networks:
+        console.print("[yellow]No networks found.[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    t = Table(title=f"Networks ({len(networks)} found)",
+              show_header=True, header_style="bold cyan")
+    t.add_column("#",    style="dim",   width=4)
+    t.add_column("SSID", style="white", min_width=16)
+    t.add_column("BSSID",style="dim",   width=19)
+    t.add_column("Ch",   style="cyan",  width=4)
+    t.add_column("Band", style="blue",  width=8)
+    t.add_column("dBm",  style="white", width=6)
+    t.add_column("Qual", style="white", width=6)
+    t.add_column("Enc",  style="white", width=10)
+    t.add_column("Risk", style="white", min_width=12)
+
+    for i, n in enumerate(networks, 1):
+        q = signal_to_quality(n.signal_dbm)
+        colour = {'Excellent':'green','Good':'green','Fair':'yellow',
+                  'Weak':'red','Very Weak':'red'}.get(q, 'white')
+        enc_colour = {'Open':'red','WEP':'red','WPA':'yellow'}.get(n.encryption, 'green')
+        risk = encryption_risk(n.encryption).split(' — ')[0]
+        risk_colour = {'CRITICAL':'red','HIGH':'red','MEDIUM':'yellow',
+                       'LOW':'green','VERY LOW':'green'}.get(risk, 'white')
+        t.add_row(
+            str(i),
+            n.ssid,
+            n.bssid,
+            str(n.channel),
+            n.band,
+            f"[{colour}]{n.signal_dbm}[/{colour}]",
+            f"[{colour}]{n.quality_pct}%[/{colour}]",
+            f"[{enc_colour}]{n.encryption}[/{enc_colour}]",
+            f"[{risk_colour}]{risk}[/{risk_colour}]",
+        )
+    console.print(t)
+
+    # Detail view
+    detail = Prompt.ask("Enter # for details (Enter to skip)", default="")
+    if detail.isdigit() and 1 <= int(detail) <= len(networks):
+        n = networks[int(detail) - 1]
+        d = Table(show_header=False, box=None)
+        d.add_column("Key", style="bold green")
+        d.add_column("Value")
+        d.add_row("SSID",       n.ssid)
+        d.add_row("BSSID",      n.bssid)
+        d.add_row("Channel",    str(n.channel))
+        d.add_row("Frequency",  f"{n.frequency_ghz} GHz ({n.band})")
+        d.add_row("Signal",     f"{n.signal_dbm} dBm — {signal_to_quality(n.signal_dbm)}")
+        d.add_row("Quality",    f"{n.quality} ({n.quality_pct}%)")
+        d.add_row("Encryption", n.encryption)
+        d.add_row("Cipher",     n.cipher)
+        d.add_row("Auth",       n.auth)
+        d.add_row("Security",   encryption_risk(n.encryption))
+        d.add_row("Last beacon", f"{n.last_beacon_ms} ms ago"
+                  if n.last_beacon_ms is not None else '—')
+        console.print(Panel(d, title=f"Detail — {n.ssid}", border_style="green"))
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_channel_analysis(mgr):
+    console.print("[cyan]Scanning for channel analysis…[/cyan]")
+    ch_map = mgr.channel_analysis()
+    if not ch_map:
+        console.print("[red]Scan failed or no networks found.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(title="Channel Usage", show_header=True, header_style="bold cyan")
+    t.add_column("Channel", style="cyan", width=9)
+    t.add_column("APs",     style="white", width=5)
+    t.add_column("SSIDs",   style="dim")
+    for ch, ssids in ch_map.items():
+        count = len(ssids)
+        colour = 'red' if count >= 4 else 'yellow' if count >= 2 else 'green'
+        t.add_row(str(ch), f"[{colour}]{count}[/{colour}]", ', '.join(ssids))
+    console.print(t)
+    console.print("[dim]Least congested channels are best for your AP.[/dim]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_network_info(mgr):
+    info = mgr.get_network_info()
+    t = Table(show_header=False, box=None)
+    t.add_column("Key", style="bold green")
+    t.add_column("Value")
+    t.add_row("Hostname",    info.get('hostname') or '—')
+    t.add_row("IP (IPv4)",   info.get('ip_cidr') or '—')
+    t.add_row("IP (IPv6)",   info.get('ip6_cidr') or '—')
+    t.add_row("Gateway",     info.get('gateway') or '—')
+    t.add_row("DNS servers", ', '.join(info.get('dns', [])) or '—')
+    console.print(Panel(t, title="Network / IP Info", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_conn_status(mgr):
+    status = mgr.get_connection_status()
+    if 'error' in status:
+        console.print(f"[red]{status['error']}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(show_header=False, box=None)
+    t.add_column("Key", style="bold green")
+    t.add_column("Value")
+    for k, v in status.items():
+        t.add_row(k, v)
+    console.print(Panel(t, title="wpa_supplicant Status", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_saved_networks(mgr):
+    nets = mgr.list_saved_networks()
+    if not nets:
+        console.print("[yellow]No saved networks (or wpa_cli not available).[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(title="Saved Networks", show_header=True, header_style="bold cyan")
+    t.add_column("ID",    style="cyan",  width=4)
+    t.add_column("SSID",  style="white")
+    t.add_column("BSSID", style="dim")
+    t.add_column("Flags", style="yellow")
+    for n in nets:
+        t.add_row(n['id'], n['ssid'], n['bssid'], n['flags'])
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_connect(mgr):
+    ssid = Prompt.ask("SSID")
+    enc  = Prompt.ask("Encryption", choices=["WPA2","WPA","WEP","Open"], default="WPA2")
+    if enc in ("WPA2", "WPA"):
+        password = Prompt.ask("Password", password=True)
+    else:
+        password = None
+    console.print(f"[cyan]Connecting to '{ssid}'…[/cyan]")
+    ok = mgr.connect(ssid, password)
+    if ok:
+        console.print("[green]Connection request sent. Check status (option 5) in a few seconds.[/green]")
+    else:
+        console.print("[red]Connection request failed.[/red]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_signal_monitor(mgr, signal_to_quality):
+    try:
+        count = int(Prompt.ask("Number of readings", default="10"))
+        interval = float(Prompt.ask("Interval (seconds)", default="1.0"))
+    except ValueError:
+        count, interval = 10, 1.0
+
+    console.print(f"[cyan]Monitoring signal ({count}× every {interval}s)…[/cyan]")
+    readings = mgr.monitor_signal(interval=interval, count=count)
+
+    t = Table(title="Signal Monitor", show_header=True, header_style="bold cyan")
+    t.add_column("#",       style="dim",   width=4)
+    t.add_column("dBm",     style="white", width=8)
+    t.add_column("Quality", style="white", width=8)
+    t.add_column("Mbps",    style="white", width=8)
+    t.add_column("Rating",  style="white")
+    for i, r in enumerate(readings, 1):
+        sig = r['signal_dbm']
+        q   = signal_to_quality(sig) if sig else '—'
+        colour = {'Excellent':'green','Good':'green','Fair':'yellow',
+                  'Weak':'red','Very Weak':'red'}.get(q, 'white')
+        t.add_row(
+            str(i),
+            f"[{colour}]{sig}[/{colour}]" if sig else '—',
+            f"{r['quality_pct']}%" if r['quality_pct'] else '—',
+            str(r['bitrate_mbps']) if r['bitrate_mbps'] else '—',
+            f"[{colour}]{q}[/{colour}]",
+        )
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_capabilities(mgr):
+    caps = mgr.get_capabilities()
+    t = Table(show_header=False, box=None)
+    t.add_column("Key", style="bold green")
+    t.add_column("Value")
+    t.add_row("Driver",       caps.get('driver', '—'))
+    t.add_row("Monitor mode", "[red]NOT supported[/red]" if not caps.get('monitor')
+              else "[green]Supported[/green]")
+    t.add_row("Modes",        ', '.join(caps.get('modes', [])))
+    t.add_row("Ciphers",      ', '.join(caps.get('ciphers', [])))
+    for band, channels in caps.get('bands', {}).items():
+        t.add_row(f"Channels {band}", ', '.join(str(c) for c in channels[:20]) +
+                  ('…' if len(channels) > 20 else ''))
+    console.print(Panel(t, title="Hardware Capabilities", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _wifi_saved_passwords(mgr):
+    console.print("[yellow]Reading wpa_supplicant.conf (requires sudo)…[/yellow]")
+    networks = mgr.read_saved_passwords()
+    if not networks:
+        console.print("[red]No saved networks found, or permission denied.[/red]")
+        console.print("[dim]Make sure you run with sudo or add yourself to the netdev group.[/dim]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    t = Table(title=f"Saved Passwords ({len(networks)} network(s))",
+              show_header=True, header_style="bold cyan")
+    t.add_column("SSID",       style="white",  min_width=20)
+    t.add_column("Password",   style="yellow", min_width=24)
+    t.add_column("Auth",       style="cyan",   min_width=12)
+    t.add_column("Priority",   style="dim",    min_width=8)
+
+    for n in networks:
+        psk = n['psk']
+        if psk.startswith('<none'):
+            psk_display = "[dim]— open —[/dim]"
+        elif psk.startswith('<hashed'):
+            psk_display = f"[dim]{psk}[/dim]"
+        elif psk.startswith('<not'):
+            psk_display = "[dim]not stored[/dim]"
+        else:
+            psk_display = f"[bold green]{psk}[/bold green]"
+
+        t.add_row(n['ssid'], psk_display, n['key_mgmt'], n['priority'])
+
+    console.print(t)
+    console.print("[dim]Source: /etc/wpa_supplicant/wpa_supplicant.conf[/dim]")
+    Prompt.ask("Press Enter to continue")
+
+
+# ---------------------------------------------------------------------------
+# Flash / Chip Memory menu
+# ---------------------------------------------------------------------------
+
+def flash_menu():
+    """Flash/Chip memory read-write-clone menu."""
+    from modules.flash import get_tool, check_tools, SPI_FLASH_COMMON, AVR_MCU_COMMON, STM32_COMMON
+
+    while True:
+        console.clear()
+        t = Table(title="Flash / Chip Memory", show_header=True, header_style="bold yellow")
+        t.add_column("Option", style="cyan", width=8)
+        t.add_column("Target", style="yellow", width=14)
+        t.add_column("Action", style="white")
+        t.add_row("1",  "SPI Flash",  "Probe chip")
+        t.add_row("2",  "SPI Flash",  "Read → file")
+        t.add_row("3",  "SPI Flash",  "Write file → chip")
+        t.add_row("4",  "SPI Flash",  "Erase chip")
+        t.add_row("5",  "SPI Flash",  "Clone (read → swap → write)")
+        t.add_row("6",  "STM32",      "Probe chip info")
+        t.add_row("7",  "STM32",      "Read flash → file")
+        t.add_row("8",  "STM32",      "Write file → flash")
+        t.add_row("9",  "STM32",      "Mass erase")
+        t.add_row("10", "AVR/Arduino","Probe chip signature")
+        t.add_row("11", "AVR/Arduino","Read flash → HEX")
+        t.add_row("12", "AVR/Arduino","Write HEX → flash")
+        t.add_row("13", "AVR/Arduino","Read EEPROM")
+        t.add_row("14", "AVR/Arduino","Write EEPROM")
+        t.add_row("15", "AVR/Arduino","Read fuses")
+        t.add_row("16", "I2C EEPROM", "Scan I2C bus")
+        t.add_row("17", "I2C EEPROM", "Read → file")
+        t.add_row("18", "I2C EEPROM", "Write file → EEPROM")
+        t.add_row("19", "I2C EEPROM", "Erase (fill 0xFF)")
+        t.add_row("20", "System",     "Check installed tools")
+        t.add_row("0",  "—",          "Back")
+        console.print(t)
+
+        choices = [str(i) for i in range(21)]
+        choice = Prompt.ask("Select option", choices=choices)
+
+        if choice == "0":
+            break
+        elif choice == "1":
+            _flash_spi_probe()
+        elif choice == "2":
+            _flash_spi_read()
+        elif choice == "3":
+            _flash_spi_write()
+        elif choice == "4":
+            _flash_spi_erase()
+        elif choice == "5":
+            _flash_spi_clone()
+        elif choice == "6":
+            _flash_stm32_probe()
+        elif choice == "7":
+            _flash_stm32_read()
+        elif choice == "8":
+            _flash_stm32_write()
+        elif choice == "9":
+            _flash_stm32_erase()
+        elif choice == "10":
+            _flash_avr_probe()
+        elif choice == "11":
+            _flash_avr_read_flash()
+        elif choice == "12":
+            _flash_avr_write_flash()
+        elif choice == "13":
+            _flash_avr_read_eeprom()
+        elif choice == "14":
+            _flash_avr_write_eeprom()
+        elif choice == "15":
+            _flash_avr_fuses()
+        elif choice == "16":
+            _flash_i2c_scan()
+        elif choice == "17":
+            _flash_i2c_read()
+        elif choice == "18":
+            _flash_i2c_write()
+        elif choice == "19":
+            _flash_i2c_erase()
+        elif choice == "20":
+            _flash_check_tools()
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — SPI NOR
+# -----------------------------------------------------------------------
+
+def _flash_spi_probe():
+    from modules.flash import SPIFlashTool
+    console.print("[cyan]Probing SPI flash on /dev/spidev0.0…[/cyan]")
+    info = SPIFlashTool().probe()
+    if not info:
+        console.print("[red]No SPI flash detected. Check wiring and SPI enabled.[/red]")
+    else:
+        t = Table(show_header=False, box=None)
+        t.add_column("Key", style="bold green"); t.add_column("Value")
+        t.add_row("Chip",       info.name)
+        t.add_row("Flash size", f"{info.flash_size // 1024} KB  ({info.flash_size} bytes)")
+        t.add_row("Page size",  f"{info.page_size} bytes")
+        console.print(Panel(t, title="SPI Flash Detected", border_style="green"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_spi_read():
+    from modules.flash import SPIFlashTool
+    out = Prompt.ask("Output file", default="data/flash/spi_dump.bin")
+    chip = Prompt.ask("Chip name (blank = auto-detect)", default="")
+    console.print("[cyan]Reading SPI flash…[/cyan]")
+    op = SPIFlashTool().read(out, chip=chip or None)
+    _show_op(op)
+
+
+def _flash_spi_write():
+    from modules.flash import SPIFlashTool
+    src = Prompt.ask("Firmware file path")
+    chip = Prompt.ask("Chip name (blank = auto-detect)", default="")
+    console.print("[yellow]This will ERASE and OVERWRITE the chip![/yellow]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    console.print("[cyan]Writing SPI flash…[/cyan]")
+    op = SPIFlashTool().write(src, chip=chip or None)
+    _show_op(op)
+
+
+def _flash_spi_erase():
+    from modules.flash import SPIFlashTool
+    chip = Prompt.ask("Chip name (blank = auto-detect)", default="")
+    console.print("[red]This will ERASE the entire chip![/red]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    op = SPIFlashTool().erase(chip=chip or None)
+    _show_op(op)
+
+
+def _flash_spi_clone():
+    from modules.flash import SPIFlashTool
+    tmp = Prompt.ask("Save image to", default="data/flash/spi_clone.bin")
+    console.print("[cyan]Step 1: Reading source chip…[/cyan]")
+    tool = SPIFlashTool()
+    op = tool.read(tmp)
+    _show_op(op)
+    if op.success:
+        console.print("[yellow]Remove source chip and insert destination chip, then press Enter.[/yellow]")
+        Prompt.ask("")
+        console.print("[cyan]Step 2: Writing to destination chip…[/cyan]")
+        op2 = tool.write(tmp)
+        _show_op(op2)
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — STM32
+# -----------------------------------------------------------------------
+
+def _stm32_tool():
+    from modules.flash import STM32Tool
+    port = Prompt.ask("UART port", default="/dev/serial0")
+    baud = int(Prompt.ask("Baud rate", default="115200"))
+    return STM32Tool(port=port, baud=baud)
+
+
+def _flash_stm32_probe():
+    tool = _stm32_tool()
+    console.print("[cyan]Entering bootloader mode and probing STM32…[/cyan]")
+    info = tool.probe()
+    if not info:
+        console.print("[red]STM32 not detected. Check BOOT0/NRST wiring and UART connection.[/red]")
+    else:
+        t = Table(show_header=False, box=None)
+        t.add_column("Key", style="bold green"); t.add_column("Value")
+        t.add_row("Device",     info.name)
+        t.add_row("Flash size", f"{info.flash_size // 1024} KB" if info.flash_size else "?")
+        console.print(Panel(t, title="STM32 Detected", border_style="green"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_stm32_read():
+    tool = _stm32_tool()
+    out = Prompt.ask("Output file", default="data/flash/stm32_dump.bin")
+    console.print("[cyan]Reading STM32 flash…[/cyan]")
+    _show_op(tool.read(out))
+
+
+def _flash_stm32_write():
+    tool = _stm32_tool()
+    src = Prompt.ask("Firmware file (.bin or .hex)")
+    console.print("[yellow]This will overwrite STM32 flash![/yellow]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    console.print("[cyan]Writing STM32 flash…[/cyan]")
+    _show_op(tool.write(src))
+
+
+def _flash_stm32_erase():
+    tool = _stm32_tool()
+    console.print("[red]This will MASS ERASE the STM32![/red]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    _show_op(tool.erase())
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — AVR / Arduino
+# -----------------------------------------------------------------------
+
+def _avr_tool():
+    from modules.flash import AVRTool, AVR_MCU_COMMON
+    console.print("[dim]Common MCUs: " + ", ".join(AVR_MCU_COMMON.keys()) + "[/dim]")
+    mcu = Prompt.ask("MCU", default="atmega328p")
+    return AVRTool(mcu=mcu)
+
+
+def _flash_avr_probe():
+    tool = _avr_tool()
+    console.print("[cyan]Probing AVR via ISP…[/cyan]")
+    info = tool.probe()
+    if not info:
+        console.print("[red]AVR not detected. Check ISP wiring and RESET pin (GPIO 25).[/red]")
+    else:
+        t = Table(show_header=False, box=None)
+        t.add_column("Key", style="bold green"); t.add_column("Value")
+        t.add_row("MCU",        info.name)
+        t.add_row("Flash",      f"{info.flash_size // 1024} KB")
+        t.add_row("EEPROM",     f"{info.extra.get('eeprom_bytes', '?')} bytes")
+        t.add_row("Signature",  info.extra.get("signature", "?"))
+        t.add_row("Board",      info.extra.get("board", "?"))
+        console.print(Panel(t, title="AVR Detected", border_style="green"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_avr_read_flash():
+    tool = _avr_tool()
+    out = Prompt.ask("Output HEX file", default="data/flash/avr_flash.hex")
+    console.print("[cyan]Reading AVR flash via ISP…[/cyan]")
+    _show_op(tool.read_flash(out))
+
+
+def _flash_avr_write_flash():
+    tool = _avr_tool()
+    src = Prompt.ask("Firmware .hex file")
+    console.print("[yellow]This will overwrite the AVR flash![/yellow]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    console.print("[cyan]Writing AVR flash…[/cyan]")
+    _show_op(tool.write_flash(src))
+
+
+def _flash_avr_read_eeprom():
+    tool = _avr_tool()
+    out = Prompt.ask("Output HEX file", default="data/flash/avr_eeprom.hex")
+    console.print("[cyan]Reading AVR EEPROM…[/cyan]")
+    _show_op(tool.read_eeprom(out))
+
+
+def _flash_avr_write_eeprom():
+    tool = _avr_tool()
+    src = Prompt.ask("EEPROM .hex file")
+    _show_op(tool.write_eeprom(src))
+
+
+def _flash_avr_fuses():
+    tool = _avr_tool()
+    console.print("[cyan]Reading fuse bytes…[/cyan]")
+    fuses = tool.read_fuses()
+    if not fuses:
+        console.print("[red]Could not read fuses.[/red]")
+    else:
+        t = Table(show_header=False, box=None)
+        t.add_column("Fuse", style="bold green"); t.add_column("Value")
+        for k, v in fuses.items():
+            t.add_row(k, v)
+        console.print(Panel(t, title="AVR Fuse Bytes", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — I2C EEPROM
+# -----------------------------------------------------------------------
+
+def _i2c_tool():
+    from modules.flash import I2CEEPROMTool
+    chips = list(I2CEEPROMTool.CHIP_SIZE.keys())
+    console.print("[dim]Common chips: " + ", ".join(chips[:8]) + "…[/dim]")
+    chip = Prompt.ask("Chip model", default="AT24C256")
+    addr = int(Prompt.ask("I2C address (hex)", default="0x50"), 16)
+    return I2CEEPROMTool(bus=1, address=addr, chip=chip)
+
+
+def _flash_i2c_scan():
+    from modules.flash import I2CEEPROMTool
+    console.print("[cyan]Scanning I2C bus 1…[/cyan]")
+    found = I2CEEPROMTool(bus=1, address=0x50).scan_bus()
+    if not found:
+        console.print("[red]No I2C devices found.[/red]")
+    else:
+        t = Table(title="I2C Devices Found", show_header=True, header_style="bold cyan")
+        t.add_column("Address (hex)")
+        t.add_column("Address (dec)")
+        for addr in found:
+            t.add_row(f"0x{addr:02X}", str(addr))
+        console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_i2c_read():
+    tool = _i2c_tool()
+    out = Prompt.ask("Output file", default="data/flash/eeprom_dump.bin")
+    console.print("[cyan]Reading I2C EEPROM…[/cyan]")
+    _show_op(tool.read(out))
+
+
+def _flash_i2c_write():
+    tool = _i2c_tool()
+    src = Prompt.ask("Input binary file")
+    _show_op(tool.write(src))
+
+
+def _flash_i2c_erase():
+    tool = _i2c_tool()
+    console.print("[yellow]This will fill the entire EEPROM with 0xFF.[/yellow]")
+    if Prompt.ask("Continue?", choices=["y", "n"]) != "y":
+        return
+    console.print("[cyan]Erasing EEPROM…[/cyan]")
+    _show_op(tool.erase())
+
+
+def _flash_check_tools():
+    from modules.flash import check_tools
+    status = check_tools()
+    t = Table(title="Required Tools", show_header=True, header_style="bold cyan")
+    t.add_column("Tool",    style="white")
+    t.add_column("Status",  style="white")
+    t.add_column("Install", style="dim")
+    install_cmds = {
+        "flashrom":   "sudo apt install flashrom",
+        "stm32flash": "sudo apt install stm32flash",
+        "avrdude":    "sudo apt install avrdude",
+        "smbus2":     "pip install smbus2",
+    }
+    for tool, ok in status.items():
+        label = "[green]✓ installed[/green]" if ok else "[red]✗ missing[/red]"
+        t.add_row(tool, label, install_cmds.get(tool, ""))
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+# -----------------------------------------------------------------------
+# Shared helper
+# -----------------------------------------------------------------------
+
+def _show_op(op):
+    """Display a FlashOperation result."""
+    if op.success:
+        msg = f"[green]✓ {op.message}[/green]"
+        if op.file:
+            msg += f"\n  File: [cyan]{op.file}[/cyan]"
+        if op.size is not None:
+            msg += f"\n  Size: [white]{op.size:,} bytes ({op.size // 1024} KB)[/white]"
+    else:
+        msg = f"[red]✗ {op.message}[/red]"
+    console.print(msg)
+    Prompt.ask("Press Enter to continue")
+
