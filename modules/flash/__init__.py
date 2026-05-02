@@ -483,6 +483,133 @@ class AVRTool:
 
 
 # ---------------------------------------------------------------------------
+# AVR / Arduino via USB Serial  (avrdude + arduino bootloader)
+# ---------------------------------------------------------------------------
+
+def _find_avr_usb_port() -> Optional[str]:
+    """Auto-detect Arduino USB serial port (/dev/ttyACM* or /dev/ttyUSB*)."""
+    import glob
+    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*"):
+        ports = sorted(glob.glob(pattern))
+        if ports:
+            return ports[0]
+    return None
+
+
+class AVRUSBTool:
+    """
+    Program AVR/Arduino via USB serial (Optiboot bootloader).
+
+    Dùng kết nối USB thông thường — không cần dây SPI/ISP.
+    Arduino UNO R3 phải có bootloader Optiboot còn nguyên.
+
+    avrdude programmer: arduino  (stk500v1 protocol qua serial)
+
+    Physical connection:
+      Cắm cáp USB từ Arduino → Raspberry Pi
+      Port xuất hiện: /dev/ttyACM0  (chip ATmega16U2)
+                   hoặc /dev/ttyUSB0  (chip CH340 — bản clone)
+
+    Giới hạn so với ISP:
+      ✓ Read flash, Write flash, Read EEPROM, Write EEPROM
+      ✗ Read/Write fuse bytes  (bootloader không hỗ trợ)
+      ✗ Unlock/lock bits
+      ✗ Chip erase toàn bộ (chỉ erase vùng app, không xoá bootloader)
+
+    Requires: sudo apt install avrdude
+    """
+
+    def __init__(self, mcu: str = "atmega328p",
+                 port: Optional[str] = None,
+                 baud: int = 115200):
+        self.mcu  = mcu
+        self.port = port or _find_avr_usb_port() or "/dev/ttyACM0"
+        self.baud = baud
+
+    def _base_cmd(self) -> List[str]:
+        return ["avrdude", "-p", self.mcu,
+                "-c", "arduino",
+                "-P", self.port,
+                "-b", str(self.baud)]
+
+    def probe(self) -> Optional[ChipInfo]:
+        """Detect AVR chip via bootloader (reads device signature)."""
+        if not _tool_exists("avrdude"):
+            logger.error("avrdude not installed. Run: sudo apt install avrdude")
+            return None
+        r = _run(self._base_cmd() + ["-n"], sudo=False, timeout=10)
+        ok = r.returncode == 0
+        sig = re.search(r'Device signature\s*=\s*(0x\w+)', r.stderr + r.stdout)
+        if not ok and "not in sync" in (r.stderr + r.stdout):
+            logger.error("Arduino not responding — check port, baud, or reset Arduino")
+            return None
+        if not ok and "programmer is not responding" in (r.stderr + r.stdout):
+            return None
+        info = AVR_MCU_COMMON.get(self.mcu, {})
+        return ChipInfo(
+            target="avr_usb",
+            name=self.mcu.upper(),
+            flash_size=info.get("flash_kb", 0) * 1024,
+            page_size=128,
+            extra={
+                "signature": sig.group(1) if sig else "?",
+                "eeprom_bytes": info.get("eeprom_b", 0),
+                "board": info.get("board", ""),
+                "port": self.port,
+                "baud": self.baud,
+                "programmer": "arduino (USB bootloader)",
+            }
+        )
+
+    def read_flash(self, output_file: str) -> FlashOperation:
+        """Read program flash to Intel HEX file."""
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        r = _run(self._base_cmd() + ["-U", f"flash:r:{output_file}:i"],
+                 sudo=False, timeout=120)
+        ok = r.returncode == 0
+        size = os.path.getsize(output_file) if ok and os.path.exists(output_file) else None
+        return FlashOperation(success=ok,
+                              message="Flash read OK" if ok else r.stderr.strip(),
+                              file=output_file, size=size)
+
+    def write_flash(self, input_file: str, verify: bool = True) -> FlashOperation:
+        """Write Intel HEX firmware to flash via bootloader."""
+        if not os.path.exists(input_file):
+            return FlashOperation(success=False, message=f"File not found: {input_file}")
+        fmt = "i" if input_file.endswith(".hex") else "r"
+        cmd = self._base_cmd() + ["-U", f"flash:w:{input_file}:{fmt}"]
+        if not verify:
+            cmd.append("-V")
+        r = _run(cmd, sudo=False, timeout=300)
+        ok = r.returncode == 0
+        return FlashOperation(success=ok,
+                              message="Flash write OK" if ok else r.stderr.strip(),
+                              file=input_file,
+                              size=os.path.getsize(input_file))
+
+    def read_eeprom(self, output_file: str) -> FlashOperation:
+        """Read EEPROM (1KB on UNO) to Intel HEX file."""
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        r = _run(self._base_cmd() + ["-U", f"eeprom:r:{output_file}:i"],
+                 sudo=False, timeout=60)
+        ok = r.returncode == 0
+        return FlashOperation(success=ok,
+                              message="EEPROM read OK" if ok else r.stderr.strip(),
+                              file=output_file)
+
+    def write_eeprom(self, input_file: str) -> FlashOperation:
+        """Write Intel HEX data to EEPROM."""
+        if not os.path.exists(input_file):
+            return FlashOperation(success=False, message=f"File not found: {input_file}")
+        r = _run(self._base_cmd() + ["-U", f"eeprom:w:{input_file}:i"],
+                 sudo=False, timeout=120)
+        ok = r.returncode == 0
+        return FlashOperation(success=ok,
+                              message="EEPROM write OK" if ok else r.stderr.strip(),
+                              file=input_file)
+
+
+# ---------------------------------------------------------------------------
 # I2C EEPROM  (AT24Cxx via smbus2)
 # ---------------------------------------------------------------------------
 

@@ -664,10 +664,16 @@ def flash_menu():
         t.add_row("19", "I2C EEPROM", "Erase (fill 0xFF)")
         t.add_row("20", "System",     "Check installed tools")
         t.add_row("21", "Remote",     "Start Remote Flash Server (LAN)")
+        t.add_row("───", "───",        "── USB / Serial ──────────────────────")
+        t.add_row("22", "AVR USB",    "Probe Arduino qua USB (auto-detect port)")
+        t.add_row("23", "AVR USB",    "Read flash → HEX  (qua USB)")
+        t.add_row("24", "AVR USB",    "Write HEX → flash (qua USB)")
+        t.add_row("25", "AVR USB",    "Read EEPROM       (qua USB)")
+        t.add_row("26", "AVR USB",    "Write EEPROM      (qua USB)")
         t.add_row("0",  "—",          "Back")
         console.print(t)
 
-        choices = [str(i) for i in range(22)]
+        choices = [str(i) for i in range(27)]
         choice = Prompt.ask("Select option", choices=choices)
 
         if choice == "0":
@@ -714,6 +720,16 @@ def flash_menu():
             _flash_check_tools()
         elif choice == "21":
             _flash_remote_server()
+        elif choice == "22":
+            _flash_avr_usb_probe()
+        elif choice == "23":
+            _flash_avr_usb_read_flash()
+        elif choice == "24":
+            _flash_avr_usb_write_flash()
+        elif choice == "25":
+            _flash_avr_usb_read_eeprom()
+        elif choice == "26":
+            _flash_avr_usb_write_eeprom()
 
 
 # -----------------------------------------------------------------------
@@ -905,6 +921,83 @@ def _flash_avr_fuses():
             t.add_row(k, v)
         console.print(Panel(t, title="AVR Fuse Bytes", border_style="cyan"))
     Prompt.ask("Press Enter to continue")
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — AVR via USB Serial
+# -----------------------------------------------------------------------
+
+def _avr_usb_tool():
+    """Tạo AVRUSBTool — auto-detect port hoặc để user nhập."""
+    import glob
+    from modules.flash import AVRUSBTool, AVR_MCU_COMMON
+
+    # Auto-detect port
+    ports = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+    if ports:
+        console.print(f"[dim]Ports tìm thấy: {', '.join(ports)}[/dim]")
+        default_port = ports[0]
+    else:
+        console.print("[yellow]Không tìm thấy port USB. Kiểm tra cáp và driver.[/yellow]")
+        default_port = "/dev/ttyACM0"
+
+    port = Prompt.ask("Serial port", default=default_port)
+    console.print(f"[dim]Common MCUs: {', '.join(AVR_MCU_COMMON.keys())}[/dim]")
+    mcu  = Prompt.ask("MCU", default="atmega328p")
+    baud = int(Prompt.ask("Baud rate", default="115200"))
+    return AVRUSBTool(mcu=mcu, port=port, baud=baud)
+
+
+def _flash_avr_usb_probe():
+    from modules.flash import AVRUSBTool
+    tool = _avr_usb_tool()
+    console.print(f"[cyan]Probing {tool.mcu} trên {tool.port}…[/cyan]")
+    info = tool.probe()
+    if not info:
+        console.print("[red]Không detect được AVR.[/red]")
+        console.print("[dim]Tips: Reset Arduino, kiểm tra đúng port/baud, sketch không block serial.[/dim]")
+    else:
+        t = Table(show_header=False, box=None)
+        t.add_column("Key", style="bold green"); t.add_column("Value")
+        t.add_row("MCU",        info.name)
+        t.add_row("Flash",      f"{info.flash_size // 1024} KB")
+        t.add_row("EEPROM",     f"{info.extra.get('eeprom_bytes', '?')} bytes")
+        t.add_row("Signature",  info.extra.get("signature", "?"))
+        t.add_row("Board",      info.extra.get("board", "?"))
+        t.add_row("Port",       info.extra.get("port", "?"))
+        t.add_row("Programmer", info.extra.get("programmer", "?"))
+        console.print(Panel(t, title="Arduino Detected (USB)", border_style="green"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_avr_usb_read_flash():
+    tool = _avr_usb_tool()
+    out  = Prompt.ask("Output HEX file", default="data/flash/avr_usb_flash.hex")
+    console.print(f"[cyan]Đọc flash từ {tool.port}…[/cyan]")
+    _show_op(tool.read_flash(out))
+
+
+def _flash_avr_usb_write_flash():
+    tool = _avr_usb_tool()
+    src  = Prompt.ask("Firmware .hex file")
+    console.print("[yellow]Sẽ ghi đè flash Arduino![/yellow]")
+    if Prompt.ask("Tiếp tục?", choices=["y", "n"]) != "y":
+        return
+    console.print(f"[cyan]Ghi flash lên {tool.port}…[/cyan]")
+    _show_op(tool.write_flash(src))
+
+
+def _flash_avr_usb_read_eeprom():
+    tool = _avr_usb_tool()
+    out  = Prompt.ask("Output HEX file", default="data/flash/avr_usb_eeprom.hex")
+    console.print(f"[cyan]Đọc EEPROM từ {tool.port}…[/cyan]")
+    _show_op(tool.read_eeprom(out))
+
+
+def _flash_avr_usb_write_eeprom():
+    tool = _avr_usb_tool()
+    src  = Prompt.ask("EEPROM .hex file")
+    _show_op(tool.write_eeprom(src))
 
 
 # -----------------------------------------------------------------------
