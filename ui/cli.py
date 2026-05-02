@@ -671,10 +671,13 @@ def flash_menu():
         t.add_row("25", "AVR USB",    "Read EEPROM       (qua USB)")
         t.add_row("26", "AVR USB",    "Write EEPROM      (qua USB)")
         t.add_row("27", "AVR USB",    "Clone Arduino → Arduino (qua USB)")
+        t.add_row("───", "───",        "── Lock Bits ─────────────────────────")
+        t.add_row("28", "AVR ISP",    "Kiểm tra Lock Bits (qua ISP)")
+        t.add_row("29", "AVR USB",    "Kiểm tra Lock Bits (qua USB)")
         t.add_row("0",  "—",          "Back")
         console.print(t)
 
-        choices = [str(i) for i in range(28)]
+        choices = [str(i) for i in range(30)]
         choice = Prompt.ask("Select option", choices=choices)
 
         if choice == "0":
@@ -733,6 +736,10 @@ def flash_menu():
             _flash_avr_usb_write_eeprom()
         elif choice == "27":
             _flash_avr_usb_clone()
+        elif choice == "28":
+            _flash_avr_check_lock_bits()
+        elif choice == "29":
+            _flash_avr_usb_check_lock_bits()
 
 
 # -----------------------------------------------------------------------
@@ -1049,6 +1056,70 @@ def _flash_avr_usb_clone():
         f"Backup: [white]{tmp}[/white]",
         border_style="green",
     ))
+    Prompt.ask("Press Enter to continue")
+
+
+# -----------------------------------------------------------------------
+# Flash helpers — Lock Bits
+# -----------------------------------------------------------------------
+
+def _show_lock_bits_result(result: dict):
+    """Hiển thị kết quả đọc lock bits với màu sắc theo mức độ."""
+    if not result.get("success"):
+        console.print(f"[red]✗ Lỗi: {result.get('error', 'Không xác định')}[/red]")
+        return
+
+    readable = result["readable"]
+    color    = "green" if readable else "red"
+    icon     = "✓" if readable else "✗"
+
+    t = Table(show_header=False, box=None)
+    t.add_column("Key", style="bold cyan", width=18)
+    t.add_column("Value")
+    t.add_row("Lock byte",  f"[white]{result['raw']}[/white] (0b{result['value']:08b})")
+    t.add_row("Chế độ",    f"[{color}]{result['mode']}[/{color}]")
+    t.add_row("Flash readable", f"[{color}]{icon} {'Có' if readable else 'Không'}[/{color}]")
+    t.add_row("Mô tả",     result["description"].split("\n")[0])
+    if not readable and "\n" in result["description"]:
+        t.add_row("", "[dim]" + result["description"].split("\n", 1)[1] + "[/dim]")
+
+    border = "green" if readable else "red"
+    console.print(Panel(t, title="Lock Bits Status", border_style=border))
+
+
+def _flash_avr_check_lock_bits():
+    """Đọc lock bits qua ISP (AVRTool) — luôn hoạt động dù flash đã bị lock."""
+    from modules.flash import AVRTool
+    tool = _avr_tool()
+    console.print("[cyan]Đọc lock byte qua ISP…[/cyan]")
+    result = tool.read_lock_bits()
+    _show_lock_bits_result(result)
+    if result.get("success") and not result["readable"]:
+        console.print(
+            "[yellow]Flash bị lock Mode 3. Để mở khóa:[/yellow]\n"
+            "  [white]• Chip Erase (mất toàn bộ data):[/white]\n"
+            "    sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 -e\n"
+            "  [white]• HVPP (12V vào RESET, giữ data — cần mạch riêng)[/white]"
+        )
+    Prompt.ask("Press Enter to continue")
+
+
+def _flash_avr_usb_check_lock_bits():
+    """Đọc lock bits qua USB bootloader (Optiboot). Fallback hướng dẫn dùng ISP nếu thất bại."""
+    tool = _avr_usb_tool()
+    console.print("[cyan]Đọc lock byte qua USB bootloader…[/cyan]")
+    result = tool.read_lock_bits()
+    _show_lock_bits_result(result)
+    if not result.get("success"):
+        console.print(
+            "[yellow]Bootloader không hỗ trợ đọc lock byte.\n"
+            "Dùng tùy chọn 28 (ISP) để đọc lock bits chính xác.[/yellow]"
+        )
+    elif result.get("success") and not result["readable"]:
+        console.print(
+            "[yellow]Flash bị lock Mode 3. Để mở khóa cần dùng ISP:[/yellow]\n"
+            "  sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 -e"
+        )
     Prompt.ask("Press Enter to continue")
 
 

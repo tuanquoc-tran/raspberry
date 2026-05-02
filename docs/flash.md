@@ -278,128 +278,420 @@ sudo systemctl disable hciuart
 
 ### Giới thiệu
 
-AVR là kiến trúc 8-bit của Atmel (nay thuộc Microchip). Arduino dùng AVR (Uno/Nano = ATmega328P).
-Raspberry Pi đóng vai trò **ISP programmer** qua SPI0 — giống USBasp hay AVRISP mkII.
+AVR là kiến trúc **8-bit RISC** của Atmel (nay thuộc Microchip). Arduino dùng AVR —
+Uno/Nano = ATmega328P, Mega = ATmega2560.
+
+RaspFlip hỗ trợ **hai phương thức** lập trình AVR:
+
+| Phương thức | Class | Kết nối | Yêu cầu |
+|---|---|---|---|
+| **ISP / ICSP** | `AVRTool` | 6 dây SPI + RESET | SPI bật, GPIO 25, level shifter khuyến nghị |
+| **USB Serial** | `AVRUSBTool` | 1 cáp USB | Bootloader Optiboot còn nguyên |
 
 **Ứng dụng:**
-- Nạp firmware / bootloader cho Arduino
 - Đọc lại firmware từ Arduino (nếu lock bit chưa set)
-- Clone Arduino sang chip khác
-- Set fuse bytes (clock source, brown-out detection, …)
+- Nạp firmware / bootloader mới
+- Clone Arduino UNO sang board khác (flash + EEPROM)
+- Đọc/ghi fuse bytes (chỉ ISP)
+- Backup sketch trước khi sửa board
+
+---
 
 ### AVR MCU Phổ Biến
 
 | MCU | Flash | EEPROM | SRAM | Board phổ biến |
 |---|---|---|---|---|
-| ATmega328P | 32 KB | 1024 B | 2 KB | Arduino Uno, Nano |
-| ATmega2560 | 256 KB | 4096 B | 8 KB | Arduino Mega |
+| ATmega328P | 32 KB | 1024 B | 2 KB | Arduino Uno R3, Nano |
+| ATmega2560 | 256 KB | 4096 B | 8 KB | Arduino Mega 2560 |
 | ATmega32U4 | 32 KB | 1024 B | 2.5 KB | Arduino Leonardo, Micro |
 | ATtiny85 | 8 KB | 512 B | 512 B | Digispark |
 | ATtiny2313 | 2 KB | 128 B | 128 B | Standalone |
 
-### Pinout — Raspberry Pi 4 ↔ AVR/Arduino (ISP/ICSP)
+---
+
+## 3A. Phương thức ISP / ICSP (AVRTool)
+
+Raspberry Pi đóng vai trò **ISP programmer** qua SPI0 — tương đương USBasp, AVRISP mkII.  
+Không cần bootloader trên chip — lập trình trực tiếp qua SPI.
+
+### Pinout — Raspberry Pi 4 ↔ Arduino UNO R3 (ICSP)
 
 ```
-Raspberry Pi 4                Arduino ISP / ICSP Header
+Raspberry Pi 4                Arduino UNO R3
 ──────────────────────        ──────────────────────────
-GPIO 10 / MOSI (Pin 19) →     MOSI  (ICSP Pin 4)
-GPIO  9 / MISO (Pin 21) ←     MISO  (ICSP Pin 1)
-GPIO 11 / SCK  (Pin 23) →     SCK   (ICSP Pin 3)
-GPIO 25        (Pin 22) →     RESET (ICSP Pin 5)  active LOW
-5V             (Pin  2) →     VCC   (ICSP Pin 2)  ⚠ Arduino cần 5V
-GND            (Pin  6) →     GND   (ICSP Pin 6)
+GPIO 10 / MOSI (Pin 19) ────► ICSP Pin 4  (MOSI)
+GPIO  9 / MISO (Pin 21) ◄──── ICSP Pin 1  (MISO)
+GPIO 11 / SCK  (Pin 23) ────► ICSP Pin 3  (SCK)
+GPIO 25        (Pin 22) ────► ICSP Pin 5  (RESET)  active LOW
+GND            (Pin  6) ────── ICSP Pin 6  (GND)
+
+⚠ KHÔNG nối VCC từ RPi — cấp nguồn Arduino riêng qua USB
+  hoặc dùng nguồn 5V ngoài qua barrel jack.
 ```
 
-> **⚠ Điện áp:** Arduino Uno/Nano chạy 5V. RPi GPIO là 3.3V.  
-> Kết nối trực tiếp có thể hoạt động nhưng không được khuyến nghị.  
-> Giải pháp an toàn: dùng level shifter 3.3V↔5V, hoặc cấp nguồn Arduino ngoài và chỉ nối signal.
-
-ICSP Header trên Arduino (nhìn từ trên, pin 1 có dấu chấm):
+ICSP Header trên Arduino UNO R3 (nhìn từ trên, dấu chấm = Pin 1):
 
 ```
-      ┌─────┐
-MISO  │1   2│ VCC
-SCK   │3   4│ MOSI
-RESET │5   6│ GND
-      └─────┘
+      ┌──────────┐
+ MISO │● 1    2 │ VCC
+  SCK │  3    4 │ MOSI
+RESET │  5    6 │ GND
+      └──────────┘
+```
+
+> **⚠ Điện áp:** Arduino Uno/Nano chạy 5V, RPi GPIO là 3.3V.
+> Kết nối trực tiếp thường hoạt động được vì AVR nhận HIGH từ ~2V trở lên,
+> nhưng giải pháp **an toàn nhất** là dùng level shifter bidirectional 74LVC245.
+
+### Kích hoạt SPI trên RPi
+
+```bash
+sudo raspi-config → Interface Options → SPI → Enable
+# Hoặc thêm vào /boot/firmware/config.txt:
+dtparam=spi=on
+
+# Kiểm tra
+ls /dev/spidev0.*   # → /dev/spidev0.0  /dev/spidev0.1
 ```
 
 ### Fuse Bytes
 
-Fuse bytes điều khiển cấu hình phần cứng của AVR — **không liên quan đến dữ liệu firmware**.
+Fuse bytes điều khiển **cấu hình phần cứng** của AVR — không liên quan đến dữ liệu firmware.
 
 | Fuse | Ý nghĩa quan trọng |
 |---|---|
-| **LFUSE** | Clock source (internal RC, external crystal, …), clock divider |
+| **LFUSE** | Clock source (internal RC / external crystal), clock divider |
 | **HFUSE** | Bootloader size, EEPROM preserve khi erase, JTAG enable, SPI enable |
-| **EFUSE** | Brown-out detection level |
+| **EFUSE** | Brown-out Detection (BOD) voltage level |
+| **Lock Bits** | Bảo vệ đọc/ghi flash (set → không đọc được data, nhưng vẫn đọc được lock byte) |
 
-> **⚠ Nguy hiểm:** Set sai fuse (ví dụ: disable SPI trên HFUSE) → **chip brick**, không thể nạp lại qua ISP.
-> Recovery cần High-Voltage Parallel Programming (HVPP) — phức tạp hơn nhiều.
+> **⚠ Nguy hiểm:** Set sai fuse (ví dụ disable SPI trong HFUSE) → **chip brick**,
+> không nạp lại được qua ISP. Recovery cần **High-Voltage Parallel Programming (HVPP)**.
 
-Giá trị mặc định ATmega328P:
+### Kiểm tra Lock Bits trước khi đọc flash
+
+Lock Bits **luôn đọc được qua ISP** — ngay cả khi flash đã bị khoá.
+Đây là cách kiểm tra trước để biết chip có bị lock không.
+
+```bash
+# Đọc lock byte qua ISP
+sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
+    -U lock:r:-:h
+
+# Đọc lock byte qua USB
+avrdude -p atmega328p -c arduino -P /dev/ttyACM0 -b 115200 \
+    -U lock:r:-:h
+```
+
+Giá trị lock byte ATmega328P (`0xFF` = mặc định, chưa lock):
+
+| Giá trị | LB2 | LB1 | Trạng thái | Đọc flash được? |
+|---|---|---|---|---|
+| `0xFF` | 1 | 1 | **Không lock** (factory default) | ✅ |
+| `0xFE` | 1 | 0 | Lock Mode 2 — cấm ghi qua programmer | ✅ (vẫn đọc được) |
+| `0xFC` | 0 | 0 | **Lock Mode 3** — cấm đọc + ghi + verify | ❌ trả về `0xFF` toàn bộ |
+
+> **Lưu ý:** Nếu kết quả là `0xFF` toàn bộ khi đọc **flash** nhưng lock byte = `0xFC`
+> → chip đã bị khoá hoàn toàn. Dữ liệu không thể phục hồi qua ISP.
+>
+> **Reset lock bits:** Chỉ có thể reset bằng **Chip Erase** — xoá sạch flash + EEPROM + lock bits.
+> Sau chip erase, lock byte trở về `0xFF`, nhưng **toàn bộ data mất**.
+
+```bash
+# Kiểm tra nhanh: đọc lock byte + fuses cùng lúc
+sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
+    -U lock:r:-:h \
+    -U lfuse:r:-:h \
+    -U hfuse:r:-:h \
+    -U efuse:r:-:h
+
+# Ví dụ output chip CHƯA lock:
+# lock = 0xff   ← OK, có thể đọc flash
+# lfuse = 0xff
+# hfuse = 0xde
+# efuse = 0x05
+
+# Ví dụ output chip ĐÃ lock Mode 3:
+# lock = 0xfc   ← Flash bị khoá, đọc sẽ ra 0xFF toàn bộ
+```
+
+**Workflow khuyến nghị trước khi đọc flash:**
 
 ```
-LFUSE = 0x62  (internal RC 8MHz, /8 divider → 1MHz)
-HFUSE = 0xD9  (bootloader 2KB, EEPROM preserve OFF, SPI ON)
-EFUSE = 0xFF  (BOD disabled)
-
-Arduino Uno bootloader fuses:
-LFUSE = 0xFF  (external crystal 16MHz, full speed)
-HFUSE = 0xDE  (bootloader 512 words = 1KB)
-EFUSE = 0x05  (BOD 2.7V)
+1. Đọc lock byte trước
+        │
+        ├── lock = 0xFF → Chip chưa lock → Đọc flash bình thường ✓
+        │
+        ├── lock = 0xFE → Lock Mode 2 → Flash vẫn đọc được qua ISP ✓
+        │                               (chỉ cấm ghi qua programmer)
+        │
+        └── lock = 0xFC → Lock Mode 3 → Flash bị khoá hoàn toàn ✗
+                          Options:
+                          a) Chip Erase → mất data, reset lock về 0xFF
+                          b) HVPP (High-Voltage Parallel Programming)
+                             → reset fuse + lock không mất data
+                             → cần mạch HVPP riêng (12V trên RESET pin)
 ```
 
-### Sử dụng
+Giá trị fuse ATmega328P:
+
+```
+Mặc định factory:
+  LFUSE = 0x62  (internal RC 8 MHz, /8 divider → 1 MHz)
+  HFUSE = 0xD9  (no bootloader, EEPROM preserve OFF, SPI ON)
+  EFUSE = 0xFF  (BOD disabled)
+
+Arduino Uno R3 (với Optiboot bootloader):
+  LFUSE = 0xFF  (external crystal 16 MHz, no divider)
+  HFUSE = 0xDE  (bootloader 512 words = 1 KB, SPI ON)
+  EFUSE = 0x05  (BOD 2.7 V)
+```
+
+Decode fuse nhanh: https://www.engbedded.com/fusecalc/
+
+### Python API — AVRTool (ISP)
 
 ```python
 from modules.flash import AVRTool
 
-tool = AVRTool(mcu="atmega328p")
+tool = AVRTool(mcu="atmega328p")   # baud ISP mặc định 400000
 
 # Detect chip signature
 info = tool.probe()
 print(f"{info.name}  sig={info.extra['signature']}")
+# ATmega328P  sig=0x1e950f
 
-# Read flash → Intel HEX
-op = tool.read_flash("sketch.hex")
+# Đọc flash → Intel HEX
+op = tool.read_flash("sketch_backup.hex")
+print(op.success, op.size)
 
-# Write firmware
-op = tool.write_flash("new_sketch.hex", verify=True)
+# Ghi firmware
+op = tool.write_flash("new_firmware.hex", verify=True)
 
-# Read EEPROM
-op = tool.read_eeprom("eeprom.hex")
-
-# Ghi EEPROM
+# Đọc / ghi EEPROM
+op = tool.read_eeprom("eeprom_backup.hex")
 op = tool.write_eeprom("eeprom_new.hex")
 
-# Đọc fuses
+# Đọc fuse bytes
 fuses = tool.read_fuses()
 # {'lfuse': '0xff', 'hfuse': '0xde', 'efuse': '0x05'}
+
+# Clone: đọc flash rồi hướng dẫn swap chip
+op = tool.clone_flash("clone_tmp.hex")
 ```
 
-### Lệnh avrdude thủ công
+### avrdude — Lệnh thủ công (ISP)
 
 ```bash
-# Detect
+# Detect (không cần -U, chỉ kiểm tra kết nối)
 sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25
 
-# Read flash
+# Đọc flash
 sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
     -U flash:r:firmware.hex:i
 
-# Write flash
+# Ghi flash
 sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
     -U flash:w:firmware.hex:i
 
-# Read fuses
+# Đọc fuses
 sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
     -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h
 
-# Write fuses (NGUY HIỂM — double check giá trị trước khi chạy)
+# Ghi fuses ⚠ NGUY HIỂM — kiểm tra kỹ giá trị trước
 sudo avrdude -p atmega328p -c linuxspi:dev=/dev/spidev0.0,reset=25 \
     -U lfuse:w:0xFF:m -U hfuse:w:0xDE:m -U efuse:w:0x05:m
 ```
+
+### CLI RaspFlip — ISP options
+
+```
+Flash/Chip Menu
+  10  AVR/Arduino  →  Probe chip signature (ISP)
+  11  AVR/Arduino  →  Read flash → HEX   (ISP)
+  12  AVR/Arduino  →  Write HEX → flash  (ISP)
+  13  AVR/Arduino  →  Read EEPROM        (ISP)
+  14  AVR/Arduino  →  Write EEPROM       (ISP)
+  15  AVR/Arduino  →  Read fuse bytes    (ISP)
+```
+
+---
+
+## 3B. Phương thức USB Serial (AVRUSBTool)
+
+Dùng cáp USB thông thường — **không cần dây SPI, không cần level shifter**.  
+Arduino UNO R3 có chip USB-to-Serial (ATmega16U2 hoặc CH340) + **Optiboot bootloader**
+trên ATmega328P. `avrdude` giao tiếp qua bootloader Optiboot (STK500v1 protocol).
+
+### Cơ chế hoạt động
+
+```
+Raspberry Pi                         Arduino UNO R3
+────────────────                     ──────────────────────────────
+               USB cable
+avrdude ──────────────────────────── CH340 / ATmega16U2
+                                          │
+                                     DTR pulse → RESET ATmega328P
+                                          │
+                                     Optiboot (bootloader)
+                                     chờ 1 giây ─────────────►
+                                          │                   │
+                                     nhận lệnh STK500      timeout → sketch
+                                          │
+                                     flash:r / flash:w / eeprom:r / eeprom:w
+```
+
+**DTR Reset:** Khi `avrdude` mở serial port, đường DTR tự động pulse LOW → HIGH,
+làm RESET ATmega328P qua tụ 100nF trên board. Optiboot khởi động và chờ lệnh.
+
+### Kết nối
+
+```bash
+# Cắm cáp USB Arduino → RPi, kiểm tra port:
+ls /dev/ttyACM* /dev/ttyUSB*
+# Arduino UNO R3 chính hãng (ATmega16U2): /dev/ttyACM0
+# Arduino clone (CH340):                  /dev/ttyUSB0
+
+# Xem log kernel:
+dmesg | tail -5
+# "cdc_acm ... ttyACM0: USB ACM device"   ← chính hãng
+# "ch341-uart converter attached to ttyUSB0" ← clone CH340
+```
+
+### Cấp quyền (làm 1 lần)
+
+```bash
+sudo usermod -aG dialout $USER
+# Logout và login lại để có hiệu lực
+```
+
+### Giới hạn so với ISP
+
+| Tính năng | USB (Bootloader) | ISP / ICSP |
+|---|---|---|
+| Đọc Flash | ✓ | ✓ |
+| Ghi Flash | ✓ | ✓ |
+| Đọc EEPROM | ✓ | ✓ |
+| Ghi EEPROM | ✓ | ✓ |
+| Đọc Fuse bytes | ✗ | ✓ |
+| Ghi Fuse bytes | ✗ | ✓ |
+| Clone (flash + EEPROM) | ✓ | ✓ |
+| Chip không có bootloader | ✗ | ✓ |
+| Tốc độ | ~11 KB/s (115200 baud) | ~50–500 KB/s (SPI) |
+| Kết nối | 1 cáp USB | 6 dây ICSP |
+
+### Python API — AVRUSBTool
+
+```python
+from modules.flash import AVRUSBTool
+
+# Auto-detect port
+tool = AVRUSBTool(mcu="atmega328p")
+# Hoặc chỉ định rõ:
+tool = AVRUSBTool(mcu="atmega328p", port="/dev/ttyACM0", baud=115200)
+
+# Detect chip
+info = tool.probe()
+print(info.name, info.extra["signature"])
+# ATmega328P  0x1e950f
+print(info.extra["programmer"])
+# arduino (USB bootloader)
+
+# Đọc flash → Intel HEX
+op = tool.read_flash("sketch_backup.hex")
+print(op.success, op.size)     # True  32768
+
+# Ghi firmware
+op = tool.write_flash("new_firmware.hex", verify=True)
+
+# Đọc / ghi EEPROM
+op = tool.read_eeprom("eeprom_backup.hex")
+op = tool.write_eeprom("eeprom_new.hex")
+
+# Clone flash (bước 1: đọc board nguồn)
+op = tool.clone_flash("clone.hex", clone_eeprom=True)
+# → lưu clone.hex + clone_eeprom.hex
+
+# Clone flash (bước 2: ghi board đích — sau khi đổi board)
+op = tool.clone_write("clone.hex", clone_eeprom=True)
+```
+
+### avrdude — Lệnh thủ công (USB)
+
+```bash
+# Detect (clone CH340 thử -b 57600 nếu 115200 lỗi)
+avrdude -p atmega328p -c arduino -P /dev/ttyACM0 -b 115200 -v
+
+# Đọc flash
+avrdude -p atmega328p -c arduino -P /dev/ttyACM0 -b 115200 \
+    -U flash:r:sketch_backup.hex:i
+
+# Ghi firmware
+avrdude -p atmega328p -c arduino -P /dev/ttyACM0 -b 115200 \
+    -U flash:w:firmware.hex:i
+
+# Đọc EEPROM
+avrdude -p atmega328p -c arduino -P /dev/ttyACM0 -b 115200 \
+    -U eeprom:r:eeprom_backup.hex:i
+
+# Disassemble file .hex (cần avr-binutils)
+avr-objdump -d -m avr5 sketch_backup.hex | head -80
+```
+
+### Quy trình Clone Arduino → Arduino (USB)
+
+```
+Board NGUỒN cắm USB
+        │
+        ▼
+  Option 27 → RaspFlip đọc flash + (EEPROM tùy chọn)
+        │
+        ▼ lưu: data/flash/avr_clone.hex
+                         avr_clone_eeprom.hex  (nếu có)
+        │
+        ▼
+  Rút board NGUỒN — cắm board ĐÍCH vào cùng cổng USB
+        │
+        ▼
+  RaspFlip ghi flash (+ EEPROM) lên board đích
+        │
+        ▼
+  Clone hoàn tất ✓
+```
+
+> **Lưu ý:**
+> - Board đích **phải có bootloader Optiboot** còn nguyên.
+> - **Fuse bytes không được clone** qua USB. Nếu board đích đã có Optiboot đúng fuse (mua mới / đã nạp bootloader) thì không cần lo.
+> - Nếu cần clone fuse: dùng ISP (option 15) sau khi clone flash.
+> - File `.hex` backup được giữ lại và có thể dùng lại để clone nhiều board.
+
+### CLI RaspFlip — USB options
+
+```
+Flash/Chip Menu
+  22  AVR USB  →  Probe Arduino qua USB (auto-detect port)
+  23  AVR USB  →  Read flash → HEX   (qua USB)
+  24  AVR USB  →  Write HEX → flash  (qua USB)
+  25  AVR USB  →  Read EEPROM        (qua USB)
+  26  AVR USB  →  Write EEPROM       (qua USB)
+  27  AVR USB  →  Clone Arduino → Arduino (qua USB)
+```
+
+---
+
+### Troubleshooting AVR
+
+| Lỗi | Nguyên nhân | Fix |
+|---|---|---|
+| `initialization failed, rc=-1` (ISP) | Dây sai / VCC thiếu / SPI chưa bật | Kiểm tra MOSI/MISO/SCK/RESET, cấp nguồn Arduino riêng |
+| `Device signature = 0x000000` (ISP) | RESET pin không pull LOW được | Kiểm tra GPIO 25 → ICSP Pin 5 |
+| `can't open device "/dev/spidev0.0"` | SPI chưa enable | `sudo raspi-config` → SPI → Enable |
+| `stk500_recv: programmer not responding` (USB) | Baud sai / bootloader lỗi | Thử `-b 57600`; reset tay Arduino rồi chạy ngay |
+| `ser_open(): can't open /dev/ttyACM0` | Sai port | `ls /dev/ttyACM* /dev/ttyUSB*` |
+| `Permission denied /dev/ttyACM0` | Thiếu quyền | `sudo usermod -aG dialout $USER` |
+| Đọc được nhưng toàn `0xFF` | Flash trống hoặc Lock Bits đã set | Sketch chưa upload, hoặc chip đã bị khoá đọc |
+| Clone xong board đích không chạy | Fuse bytes khác nhau | Dùng ISP set fuse đúng cho board đích |
+| Clone board đích bị treo ngay khi cắm | Sketch crash / xung đột peripheral | Thử nạp sketch minimal để test |
 
 ---
 

@@ -469,6 +469,62 @@ class AVRTool:
                     fuses[fuse] = f.read().strip()
         return fuses
 
+    def read_lock_bits(self) -> Dict[str, Any]:
+        """
+        Đọc lock byte qua ISP và trả về trạng thái bảo vệ flash.
+
+        Lock byte (ATmega328P / ATmega2560):
+          Bit 1 (LB2), Bit 0 (LB1) — 2 bits thấp nhất quyết định chế độ lock:
+            0b11 → Mode 1 (0xFF): Chưa lock, đọc flash bình thường.
+            0b10 → Mode 2 (0xFE): SPM bị chặn, flash vẫn đọc được.
+            0b00 → Mode 3 (0xFC): Full lock, flash trả về 0xFF khi đọc.
+
+        Returns dict:
+          success   (bool)   — True nếu đọc thành công
+          raw       (str)    — Giá trị hex thô, ví dụ "0xff"
+          value     (int)    — Giá trị int
+          mode      (str)    — Tên chế độ
+          readable  (bool)   — True nếu flash đọc được
+          description (str)  — Mô tả tiếng Việt
+          error     (str)    — Thông báo lỗi nếu success=False
+        """
+        tmp = "/tmp/lock_byte.hex"
+        r = _run(["avrdude", "-p", self.mcu, "-c", self.PROGRAMMER,
+                  "-b", str(self.baud),
+                  "-U", f"lock:r:{tmp}:h"],
+                 sudo=True, timeout=15)
+        if r.returncode != 0 or not os.path.exists(tmp):
+            return {"success": False, "error": r.stderr.strip() or "Không đọc được lock byte"}
+        with open(tmp) as f:
+            raw = f.read().strip().lower()
+        try:
+            val = int(raw, 16)
+        except ValueError:
+            return {"success": False, "error": f"Giá trị lock byte không hợp lệ: {raw}"}
+
+        lb = val & 0x03  # 2 bits thấp nhất: LB2:LB1
+        if lb == 0x03:
+            mode        = "Mode 1 — Chưa lock"
+            readable    = True
+            description = "Không có bảo vệ — đọc flash bình thường."
+        elif lb == 0x02:
+            mode        = "Mode 2 — Memory Lock"
+            readable    = True
+            description = "SPM bị chặn nhưng flash vẫn đọc được qua avrdude/ISP."
+        else:
+            mode        = "Mode 3 — Full Lock"
+            readable    = False
+            description = ("Flash bị khóa toàn bộ — đọc flash trả về 0xFF.\n"
+                           "Giải pháp: Chip Erase (mất data) hoặc HVPP (12V vào RESET, giữ data).")
+        return {
+            "success":     True,
+            "raw":         raw,
+            "value":       val,
+            "mode":        mode,
+            "readable":    readable,
+            "description": description,
+        }
+
     def clone_flash(self, tmp_file: str) -> FlashOperation:
         """Read flash from one AVR — swap chip — write to clone."""
         op = self.read_flash(tmp_file)
@@ -607,6 +663,53 @@ class AVRUSBTool:
         return FlashOperation(success=ok,
                               message="EEPROM write OK" if ok else r.stderr.strip(),
                               file=input_file)
+
+    def read_lock_bits(self) -> Dict[str, Any]:
+        """
+        Đọc lock byte qua USB bootloader (Optiboot hỗ trợ STK500 lock byte read).
+
+        Lưu ý: Chỉ đọc được, không ghi được lock bits qua USB.
+        Để reset lock bits cần ISP (Chip Erase) hoặc HVPP (12V).
+
+        Returns dict tương tự AVRTool.read_lock_bits() — xem AVRTool để biết thêm.
+        """
+        tmp = "/tmp/lock_byte_usb.hex"
+        r = _run(self._base_cmd() + ["-U", f"lock:r:{tmp}:h"],
+                 sudo=False, timeout=15)
+        if r.returncode != 0 or not os.path.exists(tmp):
+            err = r.stderr.strip() or "Không đọc được lock byte"
+            if "not implemented" in err.lower() or "invalid" in err.lower():
+                err += "\nBootloader không hỗ trợ đọc lock byte — dùng ISP (tùy chọn 28)."
+            return {"success": False, "error": err}
+        with open(tmp) as f:
+            raw = f.read().strip().lower()
+        try:
+            val = int(raw, 16)
+        except ValueError:
+            return {"success": False, "error": f"Giá trị lock byte không hợp lệ: {raw}"}
+
+        lb = val & 0x03
+        if lb == 0x03:
+            mode        = "Mode 1 — Chưa lock"
+            readable    = True
+            description = "Không có bảo vệ — đọc flash bình thường."
+        elif lb == 0x02:
+            mode        = "Mode 2 — Memory Lock"
+            readable    = True
+            description = "SPM bị chặn nhưng flash vẫn đọc được qua avrdude."
+        else:
+            mode        = "Mode 3 — Full Lock"
+            readable    = False
+            description = ("Flash bị khóa toàn bộ — đọc flash trả về 0xFF.\n"
+                           "Giải pháp: Dùng ISP + Chip Erase (mất data) hoặc HVPP (12V vào RESET).")
+        return {
+            "success":     True,
+            "raw":         raw,
+            "value":       val,
+            "mode":        mode,
+            "readable":    readable,
+            "description": description,
+        }
 
     def clone_flash(self, tmp_file: str, clone_eeprom: bool = False) -> FlashOperation:
         """
