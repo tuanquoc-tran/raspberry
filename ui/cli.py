@@ -59,8 +59,7 @@ def main_menu():
         elif choice == "6":
             wifi_menu()
         elif choice == "7":
-            console.print("[yellow]Bluetooth module - Coming soon![/yellow]")
-            Prompt.ask("Press Enter to continue")
+            bluetooth_menu()
         elif choice == "8":
             console.print("[yellow]iButton module - Coming soon![/yellow]")
             Prompt.ask("Press Enter to continue")
@@ -1050,5 +1049,299 @@ def _show_op(op):
     else:
         msg = f"[red]✗ {op.message}[/red]"
     console.print(msg)
+    Prompt.ask("Press Enter to continue")
+
+
+# =============================================================================
+# Bluetooth Menu
+# =============================================================================
+
+def bluetooth_menu():
+    """Bluetooth scanning and analysis menu."""
+    from modules.bluetooth import BluetoothManager
+
+    mgr = BluetoothManager()
+
+    # Ensure controller is up on first entry
+    if not mgr.controller_up():
+        console.print("[red]Failed to power up Bluetooth controller.[/red]")
+        console.print("[dim]Try: sudo rfkill unblock bluetooth[/dim]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    while True:
+        console.clear()
+        t = Table(title="Bluetooth", show_header=True, header_style="bold blue")
+        t.add_column("Option", style="cyan", width=8)
+        t.add_column("Action", style="white")
+        t.add_row("1",  "Controller info")
+        t.add_row("2",  "Scan all (BR/EDR + BLE)  — 15 s")
+        t.add_row("3",  "Scan BLE only            — 10 s")
+        t.add_row("4",  "Scan Classic BT only     — 15 s")
+        t.add_row("5",  "Device details (by address)")
+        t.add_row("6",  "Browse SDP services (Classic BT)")
+        t.add_row("7",  "GATT services — BLE (requires bleak)")
+        t.add_row("8",  "List paired devices")
+        t.add_row("9",  "Set discoverable ON  (180 s)")
+        t.add_row("10", "Set discoverable OFF")
+        t.add_row("11", "Set local device name")
+        t.add_row("12", "Check capabilities & tools")
+        t.add_row("0",  "Back")
+        console.print(t)
+
+        choice = Prompt.ask("Select option",
+                            choices=[str(i) for i in range(13)])
+
+        if choice == "0":
+            break
+        elif choice == "1":
+            _bt_controller_info(mgr)
+        elif choice == "2":
+            _bt_scan(mgr, mode="all", duration=15)
+        elif choice == "3":
+            _bt_scan(mgr, mode="ble", duration=10)
+        elif choice == "4":
+            _bt_scan(mgr, mode="classic", duration=15)
+        elif choice == "5":
+            _bt_device_info(mgr)
+        elif choice == "6":
+            _bt_sdp_services(mgr)
+        elif choice == "7":
+            _bt_gatt_services(mgr)
+        elif choice == "8":
+            _bt_paired_devices(mgr)
+        elif choice == "9":
+            _bt_set_discoverable(mgr, True)
+        elif choice == "10":
+            _bt_set_discoverable(mgr, False)
+        elif choice == "11":
+            _bt_set_name(mgr)
+        elif choice == "12":
+            _bt_capabilities(mgr)
+
+
+# ── Bluetooth helpers ────────────────────────────────────────────────────────
+
+def _bt_controller_info(mgr):
+    from modules.bluetooth import ControllerInfo
+    console.print("[cyan]Reading controller info…[/cyan]")
+    info = mgr.get_controller_info()
+    if not info:
+        console.print("[red]Failed to read controller info.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    t = Table(title=f"Controller — {info.hci}",
+              show_header=False, box=None)
+    t.add_column("Field", style="bold green", width=22)
+    t.add_column("Value", style="white")
+    t.add_row("BD Address",       info.addr)
+    t.add_row("Name",             info.name)
+    t.add_row("BT Version",       info.bt_version)
+    t.add_row("Manufacturer ID",  str(info.manufacturer_id))
+    t.add_row("Powered",          "[green]YES[/green]" if info.powered else "[red]NO[/red]")
+    t.add_row("Discoverable",     "[green]YES[/green]" if info.discoverable else "NO")
+    t.add_row("Pairable",         "YES" if info.pairable else "NO")
+    t.add_row("BR/EDR (Classic)", "[green]YES[/green]" if info.br_edr else "NO")
+    t.add_row("BLE (LE)",         "[green]YES[/green]" if info.le else "NO")
+    t.add_row("Secure Conn",      "YES" if info.secure_conn else "NO")
+    t.add_row("Roles",            ", ".join(info.roles) if info.roles else "-")
+    t.add_row("ADV Instances",    str(info.advertising_instances))
+    console.print(Panel(t, border_style="blue"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_scan(mgr, mode: str, duration: float):
+    mode_label = {"all": "BR/EDR + BLE", "ble": "BLE only", "classic": "Classic BT"}
+    console.print(
+        f"[cyan]Scanning [{mode_label.get(mode, mode)}] for {duration:.0f} s…[/cyan] "
+        f"[dim](Ctrl+C to stop early)[/dim]"
+    )
+    try:
+        devices = mgr.scan(duration=duration, mode=mode)
+    except KeyboardInterrupt:
+        console.print("[yellow]Scan interrupted.[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    if not devices:
+        console.print("[yellow]No devices found.[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    t = Table(
+        title=f"Found {len(devices)} device(s)",
+        show_header=True, header_style="bold blue",
+    )
+    t.add_column("#",      style="dim",    width=4)
+    t.add_column("Address",               width=19)
+    t.add_column("Name",                  width=24)
+    t.add_column("Type",    style="cyan",  width=9)
+    t.add_column("RSSI",    style="yellow",width=8)
+    t.add_column("Signal",               width=12)
+    t.add_column("Vendor",  style="dim",  width=18)
+
+    for i, d in enumerate(devices, 1):
+        rssi_str = f"{d.rssi} dBm" if d.rssi is not None else "-"
+        name_disp = d.name[:22] + "…" if len(d.name) > 23 else d.name
+        vendor = d.manufacturer[:16] + "…" if len(d.manufacturer) > 17 else d.manufacturer
+        t.add_row(
+            str(i), d.addr, name_disp or "[dim](unknown)[/dim]",
+            d.device_type, rssi_str, d.signal_quality, vendor,
+        )
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_device_info(mgr):
+    addr = Prompt.ask("BD Address (XX:XX:XX:XX:XX:XX)").strip().upper()
+    if not re.match(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", addr):
+        console.print("[red]Invalid address format.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    console.print(f"[cyan]Querying {addr}…[/cyan]")
+    info = mgr.get_device_info(addr)
+    if not info.get("success"):
+        console.print("[red]Failed. Device may not be connectable / in range.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(show_header=False, box=None)
+    t.add_column("Key",   style="bold green", width=24)
+    t.add_column("Value", style="white")
+    skip = {"addr", "success", "raw_output"}
+    for k, v in info.items():
+        if k not in skip and v:
+            t.add_row(k.replace("_", " ").title(), str(v))
+    console.print(Panel(t, title=f"Device Info — {addr}", border_style="blue"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_sdp_services(mgr):
+    import re
+    addr = Prompt.ask("BD Address (Classic BT device)").strip().upper()
+    if not re.match(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", addr):
+        console.print("[red]Invalid address.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    console.print(f"[cyan]Browsing SDP services on {addr}…[/cyan]")
+    try:
+        services = mgr.get_services(addr)
+    except Exception as e:
+        console.print(f"[red]SDP browse failed: {e}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    if not services:
+        console.print("[yellow]No SDP services found (device may be BLE-only).[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(title=f"SDP Services — {addr}",
+              show_header=True, header_style="bold blue")
+    t.add_column("Service",   width=28)
+    t.add_column("UUID",      style="dim", width=12)
+    t.add_column("Protocol",  style="cyan", width=10)
+    t.add_column("CH/PSM",    style="yellow", width=8)
+    t.add_column("Description", style="dim")
+    for s in services:
+        ch_str = str(s.channel) if s.channel is not None else "-"
+        desc = s.uuid_name or s.description or "-"
+        t.add_row(s.name[:26], s.uuid[:10], s.protocol[:8], ch_str, desc[:30])
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_gatt_services(mgr):
+    import re
+    addr = Prompt.ask("BD Address (BLE device)").strip().upper()
+    if not re.match(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", addr):
+        console.print("[red]Invalid address.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    console.print(f"[cyan]Reading GATT services on {addr}…[/cyan]")
+    try:
+        services = mgr.get_ble_services(addr, timeout=15)
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    except Exception as e:
+        console.print(f"[red]GATT read failed: {e}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    if not services:
+        console.print("[yellow]No GATT services found.[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(title=f"GATT Services — {addr}",
+              show_header=True, header_style="bold blue")
+    t.add_column("Service",  width=32)
+    t.add_column("UUID",     style="dim", width=12)
+    t.add_column("Handle",   style="yellow", width=8)
+    for s in services:
+        t.add_row(s.name[:30], s.uuid[:10], str(s.channel or "-"))
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_paired_devices(mgr):
+    devices = mgr.get_paired_devices()
+    if not devices:
+        console.print("[yellow]No paired devices.[/yellow]")
+        Prompt.ask("Press Enter to continue")
+        return
+    t = Table(title="Paired Devices",
+              show_header=True, header_style="bold blue")
+    t.add_column("Address",  width=19)
+    t.add_column("Name",     width=28)
+    t.add_column("Vendor",   style="dim")
+    for d in devices:
+        t.add_row(d["addr"], d["name"], d["manufacturer"])
+    console.print(t)
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_set_discoverable(mgr, on: bool):
+    ok = mgr.set_discoverable(on)
+    state = "[green]ON (180 s)[/green]" if on else "[yellow]OFF[/yellow]"
+    msg = f"Discoverable set to {state}" if ok else "[red]Failed to set discoverable mode.[/red]"
+    console.print(msg)
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_set_name(mgr):
+    name = Prompt.ask("New device name")
+    if not name.strip():
+        return
+    ok = mgr.set_name(name.strip())
+    console.print("[green]Name set.[/green]" if ok else "[red]Failed.[/red]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _bt_capabilities(mgr):
+    caps = mgr.check_capabilities()
+
+    t_tools = Table(title="System Tools",
+                    show_header=True, header_style="bold cyan")
+    t_tools.add_column("Tool");  t_tools.add_column("Status")
+    for tool, ok in caps["tools"].items():
+        t_tools.add_row(tool, "[green]✓[/green]" if ok else "[red]✗ missing[/red]")
+    for tool, ok in caps["optional"].items():
+        label = "[green]✓ installed[/green]" if ok else "[yellow]✗ optional (pip install bleak)[/yellow]"
+        t_tools.add_row(f"{tool} (optional)", label)
+    console.print(t_tools)
+
+    ctl = caps["controller"]
+    t_ctl = Table(title="Controller",
+                  show_header=False, box=None)
+    t_ctl.add_column("Key",   style="bold green", width=18)
+    t_ctl.add_column("Value", style="white")
+    t_ctl.add_row("HCI",         ctl["hci"])
+    t_ctl.add_row("Address",     ctl["addr"])
+    t_ctl.add_row("Name",        ctl["name"])
+    t_ctl.add_row("BT Version",  ctl["bt_version"])
+    t_ctl.add_row("BR/EDR",      "YES" if ctl["br_edr"] else "NO")
+    t_ctl.add_row("BLE",         "YES" if ctl["le"] else "NO")
+    t_ctl.add_row("Secure Conn", "YES" if ctl["secure_conn"] else "NO")
+    t_ctl.add_row("ADV Sets",    str(ctl["adv_instances"]))
+    console.print(Panel(t_ctl, border_style="blue"))
     Prompt.ask("Press Enter to continue")
 
