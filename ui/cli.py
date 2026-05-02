@@ -670,10 +670,11 @@ def flash_menu():
         t.add_row("24", "AVR USB",    "Write HEX → flash (qua USB)")
         t.add_row("25", "AVR USB",    "Read EEPROM       (qua USB)")
         t.add_row("26", "AVR USB",    "Write EEPROM      (qua USB)")
+        t.add_row("27", "AVR USB",    "Clone Arduino → Arduino (qua USB)")
         t.add_row("0",  "—",          "Back")
         console.print(t)
 
-        choices = [str(i) for i in range(27)]
+        choices = [str(i) for i in range(28)]
         choice = Prompt.ask("Select option", choices=choices)
 
         if choice == "0":
@@ -730,6 +731,8 @@ def flash_menu():
             _flash_avr_usb_read_eeprom()
         elif choice == "26":
             _flash_avr_usb_write_eeprom()
+        elif choice == "27":
+            _flash_avr_usb_clone()
 
 
 # -----------------------------------------------------------------------
@@ -998,6 +1001,55 @@ def _flash_avr_usb_write_eeprom():
     tool = _avr_usb_tool()
     src  = Prompt.ask("EEPROM .hex file")
     _show_op(tool.write_eeprom(src))
+
+
+def _flash_avr_usb_clone():
+    console.print(Panel(
+        "[bold]Clone Arduino → Arduino qua USB[/bold]\n"
+        "  Bước 1: Kết nối board NGUỒN → đọc flash (+ EEPROM tùy chọn)\n"
+        "  Bước 2: Rút board nguồn, cắm board ĐÍCH vào cùng cổng USB\n"
+        "  Bước 3: Ghi flash (+ EEPROM) lên board đích\n\n"
+        "[yellow]⚠  Bootloader trên board đích phải còn nguyên.[/yellow]\n"
+        "[dim]Fuse bytes KHÔNG clone được qua USB — dùng ISP nếu cần.[/dim]",
+        title="AVR USB Clone", border_style="cyan",
+    ))
+
+    clone_eeprom = Prompt.ask("Clone cả EEPROM?", choices=["y", "n"], default="n") == "y"
+    tmp = Prompt.ask("File tạm lưu flash", default="data/flash/avr_clone.hex")
+
+    # Bước 1 — đọc board nguồn
+    console.print("\n[bold cyan]Bước 1 — Kết nối board NGUỒN rồi nhấn Enter…[/bold cyan]")
+    Prompt.ask("")
+    tool = _avr_usb_tool()
+    console.print(f"[cyan]Đọc flash từ {tool.port}…[/cyan]")
+    op = tool.clone_flash(tmp, clone_eeprom=clone_eeprom)
+    if not op.success:
+        console.print(f"[red]✗ {op.message}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+    console.print(f"[green]✓ Đọc xong — {op.size:,} bytes → {tmp}[/green]")
+    if clone_eeprom:
+        console.print(f"[green]✓ EEPROM → {tmp.replace('.hex','_eeprom.hex')}[/green]")
+
+    # Bước 2 — đổi board
+    console.print("\n[bold yellow]Bước 2 — Rút board NGUỒN, cắm board ĐÍCH vào cùng cổng USB.[/bold yellow]")
+    Prompt.ask("Nhấn Enter khi đã cắm board đích…")
+
+    # Bước 3 — ghi board đích
+    console.print(f"[cyan]Bước 3 — Ghi flash lên {tool.port}…[/cyan]")
+    op_w = tool.clone_write(tmp, clone_eeprom=clone_eeprom)
+    if not op_w.success:
+        console.print(f"[red]✗ {op_w.message}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    console.print(Panel(
+        f"[bold green]Clone hoàn tất![/bold green]\n"
+        f"Flash{'  +  EEPROM' if clone_eeprom else ''} đã được sao chép.\n"
+        f"Backup: [white]{tmp}[/white]",
+        border_style="green",
+    ))
+    Prompt.ask("Press Enter to continue")
 
 
 # -----------------------------------------------------------------------

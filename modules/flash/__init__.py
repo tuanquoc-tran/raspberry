@@ -608,6 +608,52 @@ class AVRUSBTool:
                               message="EEPROM write OK" if ok else r.stderr.strip(),
                               file=input_file)
 
+    def clone_flash(self, tmp_file: str, clone_eeprom: bool = False) -> FlashOperation:
+        """
+        Bước 1+2 của quy trình clone: đọc flash (và EEPROM) từ board nguồn.
+        Sau đó user đổi board, gọi write_flash() để hoàn tất.
+        """
+        op = self.read_flash(tmp_file)
+        if not op.success:
+            return FlashOperation(success=False,
+                                  message=f"Read flash thất bại: {op.message}")
+        eeprom_file: Optional[str] = None
+        if clone_eeprom:
+            eeprom_file = tmp_file.replace(".hex", "_eeprom.hex")
+            if not eeprom_file.endswith("_eeprom.hex"):
+                eeprom_file = tmp_file + "_eeprom.hex"
+            op_e = self.read_eeprom(eeprom_file)
+            if not op_e.success:
+                return FlashOperation(success=False,
+                                      message=f"Read EEPROM thất bại: {op_e.message}")
+        summary = (
+            f"Flash đã lưu: {tmp_file} ({op.size} bytes)\n"
+            + (f"EEPROM đã lưu: {eeprom_file}\n" if eeprom_file else "")
+            + f"Cắm board đích, sau đó gọi write_flash('{tmp_file}') để hoàn tất clone."
+        )
+        return FlashOperation(success=True, message=summary,
+                              file=tmp_file, size=op.size)
+
+    def clone_write(self, tmp_file: str, clone_eeprom: bool = False) -> FlashOperation:
+        """Bước 3+4: ghi flash (và EEPROM) lên board đích sau khi đã đọc xong."""
+        op_w = self.write_flash(tmp_file)
+        if not op_w.success:
+            return FlashOperation(success=False,
+                                  message=f"Write flash thất bại: {op_w.message}")
+        if clone_eeprom:
+            eeprom_file = tmp_file.replace(".hex", "_eeprom.hex")
+            if not eeprom_file.endswith("_eeprom.hex"):
+                eeprom_file = tmp_file + "_eeprom.hex"
+            op_e = self.write_eeprom(eeprom_file)
+            if not op_e.success:
+                return FlashOperation(success=False,
+                                      message=f"Write EEPROM thất bại: {op_e.message}")
+        return FlashOperation(success=True,
+                              message="Clone hoàn tất! Flash"
+                              + (" + EEPROM" if clone_eeprom else "")
+                              + " đã được sao chép.",
+                              file=tmp_file, size=op_w.size)
+
 
 # ---------------------------------------------------------------------------
 # I2C EEPROM  (AT24Cxx via smbus2)
