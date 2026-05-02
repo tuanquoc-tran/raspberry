@@ -683,3 +683,154 @@ def _module_exists(name: str) -> bool:
         return True
     except ImportError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Remote Flash Server  (HTTP, LAN only)
+# ---------------------------------------------------------------------------
+
+class RemoteFlashServer:
+    """
+    Lightweight HTTP server that accepts firmware uploads over the network
+    and programs them into chips connected to this Raspberry Pi.
+
+    Security model:
+      - Shared-secret token in X-Auth-Token header (every request)
+      - Intended for LAN use only — do NOT expose to the internet
+
+    Endpoints:
+      GET  /status   → JSON {"status":"ok","targets":[...]}
+      POST /flash    → JSON body → program chip → JSON result
+
+    POST /flash body (JSON):
+      {
+        "target":   "avr" | "stm32" | "spi",
+        "mcu":      "atmega328p",          # AVR only
+        "port":     "/dev/serial0",        # STM32 only
+        "filename": "sketch.hex",          # for extension detection
+        "file_b64": "<base64 content>",    # hex or bin file
+        "verify":   true
+      }
+
+    Usage from laptop:
+      python scripts/remote_flash.py --host raspberrypi.local \\
+          --token <token> --target avr firmware.hex
+    """
+
+    DEFAULT_PORT = 7777
+
+    def __init__(self, host: str = "0.0.0.0", port: int = DEFAULT_PORT,
+                 token: Optional[str] = None):
+        self.host  = host
+        self.port  = port
+        import secrets
+        self.token = token or secrets.token_hex(16)
+        self._server = None
+
+    def start(self, blocking: bool = True) -> None:
+        """Start the HTTP server. Blocks until stop() is called (if blocking=True)."""
+        import json
+        import base64
+        import tempfile
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+
+        server_token = self.token
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):  # suppress default stderr log
+                logger.debug("[RemoteFlash] " + fmt % args)
+
+            def _auth(self) -> bool:
+                return self.headers.get("X-Auth-Token") == server_token
+
+            def _send_json(self, code: int, data: dict) -> None:
+                body = json.dumps(data).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if not self._auth():
+                    self._send_json(401, {"error": "unauthorized"})
+                    return
+                if self.path == "/status":
+                    self._send_json(200, {
+                        "status":  "ok",
+                        "targets": ["avr", "stm32", "spi"],
+                    })
+                else:
+                    self._send_json(404, {"error": "not found"})
+
+            def do_POST(self):
+                if not self._auth():
+                    self._send_json(401, {"error": "unauthorized"})
+                    return
+                if self.path != "/flash":
+                    self._send_json(404, {"error": "not found"})
+                    return
+
+                try:
+                    length  = int(self.headers.get("Content-Length", 0))
+                    if length > 32 * 1024 * 1024:  # 32 MB sanity limit
+                        self._send_json(413, {"error": "payload too large"})
+                        return
+                    body     = json.loads(self.rfile.read(length))
+                    target   = str(body.get("target", "avr")).lower()
+                    filename = os.path.basename(str(body.get("filename", "firmware.bin")))
+                    file_b64 = str(body.get("file_b64", ""))
+                    mcu      = str(body.get("mcu", "atmega328p"))
+                    port     = str(body.get("port", "/dev/serial0"))
+                    verify   = bool(body.get("verify", True))
+
+                    # Validate target
+                    if target not in ("avr", "stm32", "spi"):
+                        self._send_json(400, {"error": f"unknown target: {target}"})
+                        return
+
+                    # Decode firmware
+                    data = base64.b64decode(file_b64)
+                    ext  = os.path.splitext(filename)[1].lower() or ".bin"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f:
+                        f.write(data)
+                        tmp_path = f.name
+
+                    try:
+                        if target == "avr":
+                            op = AVRTool(mcu=mcu).write_flash(tmp_path, verify=verify)
+                        elif target == "stm32":
+                            op = STM32Tool(port=port).write(tmp_path, verify=verify)
+                        elif target == "spi":
+                            op = SPIFlashTool().write(tmp_path, verify=verify)
+                        else:
+                            op = FlashOperation(success=False, message="unreachable")
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+
+                    self._send_json(200 if op.success else 500, {
+                        "success": op.success,
+                        "message": op.message,
+                        "size":    op.size,
+                    })
+
+                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                    self._send_json(400, {"error": f"bad request: {e}"})
+                except Exception as e:
+                    logger.error(f"RemoteFlash error: {e}")
+                    self._send_json(500, {"success": False, "message": str(e)})
+
+        from http.server import HTTPServer
+        self._server = HTTPServer((self.host, self.port), _Handler)
+        logger.info(f"RemoteFlashServer listening on {self.host}:{self.port}")
+        if blocking:
+            self._server.serve_forever()
+
+    def stop(self) -> None:
+        """Shut down the HTTP server."""
+        if self._server:
+            self._server.shutdown()
+            self._server = None

@@ -664,10 +664,11 @@ def flash_menu():
         t.add_row("18", "I2C EEPROM", "Write file → EEPROM")
         t.add_row("19", "I2C EEPROM", "Erase (fill 0xFF)")
         t.add_row("20", "System",     "Check installed tools")
+        t.add_row("21", "Remote",     "Start Remote Flash Server (LAN)")
         t.add_row("0",  "—",          "Back")
         console.print(t)
 
-        choices = [str(i) for i in range(21)]
+        choices = [str(i) for i in range(22)]
         choice = Prompt.ask("Select option", choices=choices)
 
         if choice == "0":
@@ -712,6 +713,8 @@ def flash_menu():
             _flash_i2c_erase()
         elif choice == "20":
             _flash_check_tools()
+        elif choice == "21":
+            _flash_remote_server()
 
 
 # -----------------------------------------------------------------------
@@ -954,6 +957,62 @@ def _flash_i2c_erase():
         return
     console.print("[cyan]Erasing EEPROM…[/cyan]")
     _show_op(tool.erase())
+
+
+def _flash_remote_server():
+    """Start RemoteFlashServer on LAN so laptops can push firmware over HTTP."""
+    import threading
+    import socket
+    from modules.flash import RemoteFlashServer
+
+    console.print(Panel(
+        "[bold yellow]Remote Flash Server[/bold yellow]\n"
+        "Cho phép upload và nạp firmware từ laptop/PC qua mạng LAN.\n"
+        "Server chạy HTTP — [red]chỉ dùng trên mạng LAN tin cậy.[/red]",
+        border_style="yellow",
+    ))
+
+    port_str = Prompt.ask("Port", default="7777")
+    token_in = Prompt.ask("Auth token (Enter để tự generate)", default="")
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        console.print("[red]Port không hợp lệ.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    server = RemoteFlashServer(port=port, token=token_in or None)
+
+    # Detect LAN IP for display
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        lan_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        lan_ip = "raspberrypi.local"
+
+    console.print(f"\n[green]Token :[/green] [bold cyan]{server.token}[/bold cyan]")
+    console.print(f"[green]URL   :[/green] http://{lan_ip}:{port}/flash")
+    console.print("\n[dim]Từ laptop:[/dim]")
+    console.print(
+        f"[white]  python scripts/remote_flash.py "
+        f"--host {lan_ip} --token {server.token} "
+        f"--target avr firmware.hex[/white]"
+    )
+    console.print("\n[yellow]Nhấn Ctrl+C để dừng server.[/yellow]\n")
+
+    t = threading.Thread(target=lambda: server.start(blocking=True), daemon=True)
+    t.start()
+    try:
+        while t.is_alive():
+            import time
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        server.stop()
+    console.print("\n[yellow]Server stopped.[/yellow]")
+    Prompt.ask("Press Enter to continue")
 
 
 def _flash_check_tools():
