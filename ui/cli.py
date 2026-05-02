@@ -34,16 +34,18 @@ def main_menu():
         table.add_row("9", "Settings", "Configure hardware and software")
         table.add_row("10", "Flash/Chip", "Read, write, clone SPI/STM32/AVR/I2C chips")
         table.add_row("11", "Hardware",   "System info, temperature, CPU, connected devices")
+        table.add_row("12", "Servo",      "PCA9685 16-ch PWM driver — servo test & control")
         table.add_row("0", "Exit", "Exit RaspFlip")
         
         console.print(table)
         console.print()
         
-        choice = Prompt.ask("Select option", choices=["0","1","2","3","4","5","6","7","8","9","10","11"])
+        choice = Prompt.ask("Select option", choices=["0","1","2","3","4","5","6","7","8","9","10","11","12"])
         
         if choice == "0":
             break
         elif choice == "1":
+
             rfid_menu()
         elif choice == "2":
             console.print("[yellow]Sub-GHz module - Coming soon![/yellow]")
@@ -70,6 +72,8 @@ def main_menu():
             flash_menu()
         elif choice == "11":
             hardware_menu()
+        elif choice == "12":
+            servo_menu()
 
 def rfid_menu():
     """RFID/NFC module menu"""
@@ -1843,4 +1847,265 @@ def _bt_capabilities(mgr):
     t_ctl.add_row("ADV Sets",    str(ctl["adv_instances"]))
     console.print(Panel(t_ctl, border_style="blue"))
     Prompt.ask("Press Enter to continue")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Servo / PCA9685 Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def servo_menu():
+    """PCA9685 16-channel PWM servo driver — test & control."""
+    from modules.servo import PCA9685, detect_pca9685
+
+    # ── persistent state for this session ──────────────────────────────────
+    state = {
+        "bus":         1,
+        "addr":        0x40,
+        "freq":        50.0,
+        "min_pulse":   500,
+        "max_pulse":   2500,
+    }
+
+    while True:
+        console.clear()
+        t = Table(title="Servo / PCA9685", show_header=True, header_style="bold magenta")
+        t.add_column("Option", style="cyan", width=8)
+        t.add_column("Action", style="white")
+        t.add_row("1",  "Detect PCA9685 on I2C bus")
+        t.add_row("2",  "Set servo angle  (single channel)")
+        t.add_row("3",  "Sweep test       (0 → 180 → 0°)")
+        t.add_row("4",  "Center all channels  (90°)")
+        t.add_row("5",  "Release all channels (PWM off)")
+        t.add_row("6",  "Multi-channel set    (several channels at once)")
+        t.add_row("7",  "Configure  (bus, address, frequency, pulse range)")
+        t.add_row("0",  "Back")
+        console.print(t)
+        console.print(
+            f"[dim]  Bus: i2c-{state['bus']}  Addr: 0x{state['addr']:02X}  "
+            f"Freq: {state['freq']:.0f} Hz  "
+            f"Pulse: {state['min_pulse']}–{state['max_pulse']} µs[/dim]"
+        )
+
+        choice = Prompt.ask("Select option", choices=[str(i) for i in range(8)])
+        if choice == "0":
+            break
+        elif choice == "1":
+            _servo_detect(state)
+        elif choice == "2":
+            _servo_set_angle(state)
+        elif choice == "3":
+            _servo_sweep(state)
+        elif choice == "4":
+            _servo_center_all(state)
+        elif choice == "5":
+            _servo_all_off(state)
+        elif choice == "6":
+            _servo_multi_set(state)
+        elif choice == "7":
+            _servo_configure(state)
+
+
+# ── Servo helpers ─────────────────────────────────────────────────────────────
+
+def _servo_detect(state: dict) -> None:
+    from modules.servo import detect_pca9685
+    console.print()
+    with console.status(f"[cyan]Scanning I2C bus {state['bus']} for PCA9685…[/cyan]"):
+        chips = detect_pca9685(state["bus"])
+
+    if not chips:
+        console.print(Panel(
+            "[yellow]No PCA9685 found.[/yellow]\n"
+            "[dim]Check wiring: SDA=GPIO2(pin3)  SCL=GPIO3(pin5)  VCC=3.3 V or 5 V\n"
+            "Enable I2C:  sudo raspi-config  → Interface Options → I2C[/dim]",
+            title="Detect PCA9685", border_style="yellow",
+        ))
+    else:
+        t = Table(show_header=True, header_style="bold cyan")
+        t.add_column("Address",     style="yellow", width=12)
+        t.add_column("Mode1 reg",   style="dim",    width=12)
+        t.add_column("Status",      style="white")
+        for c in chips:
+            t.add_row(f"0x{c.address:02X}", f"0x{c.mode1_reg:02X}", c.description)
+        console.print(Panel(t, title=f"PCA9685 found — {len(chips)} chip(s)",
+                            border_style="green"))
+        if len(chips) == 1:
+            state["addr"] = chips[0].address
+            console.print(f"[dim]Address 0x{state['addr']:02X} saved as active.[/dim]")
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_set_angle(state: dict) -> None:
+    from modules.servo import PCA9685
+    console.print()
+    ch_str  = Prompt.ask("Channel (0–15)", default="0")
+    ang_str = Prompt.ask("Angle   (0–180)", default="90")
+    try:
+        ch  = int(ch_str)
+        ang = float(ang_str)
+        if not 0 <= ch <= 15:
+            raise ValueError("Channel out of range")
+    except ValueError as e:
+        console.print(f"[red]Invalid input: {e}[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    try:
+        with PCA9685(state["bus"], state["addr"]) as pca:
+            pca.set_pwm_freq(state["freq"])
+            pca.set_servo_angle(ch, ang,
+                                min_pulse_us=state["min_pulse"],
+                                max_pulse_us=state["max_pulse"])
+        console.print(f"[green]Channel {ch} → {ang:.1f}°[/green]")
+    except OSError as e:
+        _servo_error(e)
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_sweep(state: dict) -> None:
+    from modules.servo import PCA9685
+    console.print()
+    ch_str = Prompt.ask("Channel (0–15)", default="0")
+    try:
+        ch = int(ch_str)
+        if not 0 <= ch <= 15:
+            raise ValueError
+    except ValueError:
+        console.print("[red]Invalid channel.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    console.print(f"[cyan]Sweeping channel {ch}: 0° → 180° → 0°  (Ctrl-C to stop)[/cyan]")
+    try:
+        with PCA9685(state["bus"], state["addr"]) as pca:
+            pca.set_pwm_freq(state["freq"])
+
+            def _tick(angle: float) -> None:
+                bar = int(angle / 5)
+                console.print(
+                    f"\r  {angle:5.1f}°  [{'█' * bar}{' ' * (36 - bar)}]",
+                    end="", highlight=False,
+                )
+
+            pca.sweep(ch, 0, 180,
+                      steps=60, delay_s=0.025,
+                      callback=_tick,
+                      min_pulse_us=state["min_pulse"],
+                      max_pulse_us=state["max_pulse"])
+        console.print("\n[green]Sweep complete.[/green]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Sweep interrupted.[/yellow]")
+    except OSError as e:
+        _servo_error(e)
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_center_all(state: dict) -> None:
+    from modules.servo import PCA9685
+    console.print()
+    try:
+        with PCA9685(state["bus"], state["addr"]) as pca:
+            pca.set_pwm_freq(state["freq"])
+            for ch in range(16):
+                pca.set_servo_angle(ch, 90,
+                                    min_pulse_us=state["min_pulse"],
+                                    max_pulse_us=state["max_pulse"])
+        console.print("[green]All 16 channels centered at 90°.[/green]")
+    except OSError as e:
+        _servo_error(e)
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_all_off(state: dict) -> None:
+    from modules.servo import PCA9685
+    console.print()
+    try:
+        with PCA9685(state["bus"], state["addr"]) as pca:
+            pca.all_off()
+        console.print("[green]All channels OFF — servos released.[/green]")
+    except OSError as e:
+        _servo_error(e)
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_multi_set(state: dict) -> None:
+    from modules.servo import PCA9685
+    console.print()
+    console.print("[dim]Enter channel:angle pairs, e.g.  0:90  1:45  3:135[/dim]")
+    raw = Prompt.ask("Channels")
+    pairs: list[tuple[int, float]] = []
+    for token in raw.split():
+        if ":" not in token:
+            continue
+        left, right = token.split(":", 1)
+        try:
+            ch  = int(left)
+            ang = float(right)
+            if 0 <= ch <= 15 and 0 <= ang <= 180:
+                pairs.append((ch, ang))
+        except ValueError:
+            pass
+
+    if not pairs:
+        console.print("[red]No valid pairs parsed.[/red]")
+        Prompt.ask("Press Enter to continue")
+        return
+
+    try:
+        with PCA9685(state["bus"], state["addr"]) as pca:
+            pca.set_pwm_freq(state["freq"])
+            for ch, ang in pairs:
+                pca.set_servo_angle(ch, ang,
+                                    min_pulse_us=state["min_pulse"],
+                                    max_pulse_us=state["max_pulse"])
+                console.print(f"  Channel {ch:2d} → {ang:.1f}°")
+        console.print(f"[green]{len(pairs)} channel(s) updated.[/green]")
+    except OSError as e:
+        _servo_error(e)
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_configure(state: dict) -> None:
+    console.print()
+    console.print("[bold cyan]Configure PCA9685 connection[/bold cyan]")
+
+    bus_s = Prompt.ask("I2C bus number", default=str(state["bus"]))
+    addr_s = Prompt.ask("I2C address (hex, e.g. 40)", default=f"{state['addr']:02X}")
+    freq_s = Prompt.ask("PWM frequency Hz (50 for standard servos)", default=str(int(state["freq"])))
+    min_s  = Prompt.ask("Min pulse µs (0°)",   default=str(state["min_pulse"]))
+    max_s  = Prompt.ask("Max pulse µs (180°)", default=str(state["max_pulse"]))
+
+    try:
+        state["bus"]       = int(bus_s)
+        state["addr"]      = int(addr_s, 16)
+        state["freq"]      = float(freq_s)
+        state["min_pulse"] = int(min_s)
+        state["max_pulse"] = int(max_s)
+        console.print("[green]Settings updated.[/green]")
+    except ValueError as e:
+        console.print(f"[red]Invalid value: {e}[/red]")
+
+    Prompt.ask("Press Enter to continue")
+
+
+def _servo_error(exc: OSError) -> None:
+    msg = str(exc)
+    if "No such file" in msg:
+        hint = "I2C device not found — is /dev/i2c-1 present? Run: sudo raspi-config → I2C"
+    elif "Permission denied" in msg:
+        hint = "Permission denied — run as root or add user to 'i2c' group: sudo usermod -aG i2c $USER"
+    elif "No such device" in msg or "errno 6" in msg.lower() or "[errno 6]" in msg.lower():
+        hint = "Device not responding — check wiring (SDA/SCL/VCC/GND) and I2C address"
+    elif "Remote I/O error" in msg:
+        hint = "NACK from device — wrong address? Run option 1 (Detect) first"
+    else:
+        hint = "Check wiring and I2C configuration"
+    console.print(Panel(
+        f"[red]{exc}[/red]\n[dim]{hint}[/dim]",
+        title="I2C Error", border_style="red",
+    ))
 

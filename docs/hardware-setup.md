@@ -278,3 +278,84 @@ File STL có sẵn tại: `hardware/case/`
 - [RC522 Datasheet](https://www.nxp.com/docs/en/data-sheet/MFRC522.pdf)
 - [CC1101 Datasheet](https://www.ti.com/lit/ds/symlink/cc1101.pdf)
 - [VS1838B Datasheet](https://www.vishay.com/docs/82459/tsop48.pdf)
+
+---
+
+## 🤖 PCA9685 — 16-Channel PWM Servo Driver
+
+### Wiring to Raspberry Pi 4
+
+| PCA9685 Pin | Raspberry Pi 4 | Physical Pin |
+|-------------|---------------|--------------|
+| **VCC**     | 3.3 V         | Pin 1        |
+| **GND**     | GND           | Pin 6        |
+| **SDA**     | GPIO 2 (SDA1) | Pin 3        |
+| **SCL**     | GPIO 3 (SCL1) | Pin 5        |
+| **V+**      | 5 V *(servo power — see note)* | Pin 2 or 4 |
+
+> **V+** powers the servos, not the PCA9685 chip itself.  
+> For more than 2–3 servos, or servos larger than micro-size, use a dedicated 5 V–6 V power supply on V+/GND rather than drawing from the Pi's 5 V rail.
+
+### Enable I2C on the Pi
+
+```bash
+sudo raspi-config
+# → Interface Options → I2C → Enable → Reboot
+```
+
+Or add to `/boot/config.txt` and reboot:
+```
+dtparam=i2c_arm=on
+```
+
+Load the module without rebooting:
+```bash
+sudo modprobe i2c-dev
+```
+
+### Verify Connection
+
+```bash
+# List available I2C buses
+ls /dev/i2c*
+
+# Scan for devices (requires i2c-tools)
+sudo apt install i2c-tools
+i2cdetect -y 1
+```
+
+PCA9685 default address is **0x40** — you should see `40` in the scan grid.
+
+### I2C Address Selection (multiple PCA9685 boards)
+
+Each chip has six address pins A0–A5 (solder bridge pads):
+
+| Bridged pins | I2C Address |
+|-------------|-------------|
+| None        | 0x40        |
+| A0          | 0x41        |
+| A1          | 0x42        |
+| A0 + A1     | 0x43        |
+| A2          | 0x44        |
+| …           | up to 0x4F  |
+
+Up to 62 boards can share one I2C bus.
+
+### Servo Channel Pinout
+
+Each of the 16 channels (0–15) has three pins:
+
+```
+PWM  →  Signal wire  (orange / yellow)
+V+   →  VCC servo   (red)
+GND  →  GND servo   (brown / black)
+```
+
+### Software (RaspFlip)
+
+1. Main menu → **option 12 (Servo)**
+2. **Option 1** — Detect: scans I2C bus and auto-saves the address
+3. **Option 7** — Configure: change bus, address, PWM frequency, pulse range
+
+Default pulse range: **500–2500 µs** (0°–180°).  
+For servos using a narrower range (e.g. 1000–2000 µs), update via option 7.
