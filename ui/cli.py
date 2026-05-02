@@ -33,12 +33,13 @@ def main_menu():
         table.add_row("8", "iButton", "Read and clone iButton keys")
         table.add_row("9", "Settings", "Configure hardware and software")
         table.add_row("10", "Flash/Chip", "Read, write, clone SPI/STM32/AVR/I2C chips")
+        table.add_row("11", "Hardware",   "System info, temperature, CPU, connected devices")
         table.add_row("0", "Exit", "Exit RaspFlip")
         
         console.print(table)
         console.print()
         
-        choice = Prompt.ask("Select option", choices=["0","1","2","3","4","5","6","7","8","9","10"])
+        choice = Prompt.ask("Select option", choices=["0","1","2","3","4","5","6","7","8","9","10","11"])
         
         if choice == "0":
             break
@@ -67,6 +68,8 @@ def main_menu():
             settings_menu()
         elif choice == "10":
             flash_menu()
+        elif choice == "11":
+            hardware_menu()
 
 def rfid_menu():
     """RFID/NFC module menu"""
@@ -306,6 +309,286 @@ def settings_menu():
         else:
             console.print("[yellow]Function not yet implemented[/yellow]")
             Prompt.ask("Press Enter to continue")
+
+
+# ---------------------------------------------------------------------------
+# Hardware Monitor menu
+# ---------------------------------------------------------------------------
+
+def hardware_menu():
+    """Hardware monitor — CPU, RAM, temperature, connected devices."""
+    while True:
+        console.clear()
+        t = Table(title="Hardware Monitor", show_header=True, header_style="bold magenta")
+        t.add_column("Option", style="cyan", width=8)
+        t.add_column("Info", style="white")
+        t.add_row("1",  "System overview (CPU, RAM, Storage, Uptime)")
+        t.add_row("2",  "Temperature (CPU, GPU, sensors, throttle)")
+        t.add_row("3",  "CPU details (model, cores, frequency, usage)")
+        t.add_row("4",  "RAM & Swap")
+        t.add_row("5",  "Storage & disks")
+        t.add_row("6",  "Network interfaces")
+        t.add_row("7",  "USB devices (connected boards)")
+        t.add_row("8",  "I2C devices (bus scan)")
+        t.add_row("9",  "SPI / GPIO / UART interfaces")
+        t.add_row("10", "All information (all in one)")
+        t.add_row("0",  "Back")
+        console.print(t)
+
+        choice = Prompt.ask("Select option", choices=[str(i) for i in range(11)])
+        if choice == "0":
+            break
+        elif choice == "1":
+            _hw_overview()
+        elif choice == "2":
+            _hw_temperature()
+        elif choice == "3":
+            _hw_cpu()
+        elif choice == "4":
+            _hw_memory()
+        elif choice == "5":
+            _hw_storage()
+        elif choice == "6":
+            _hw_network()
+        elif choice == "7":
+            _hw_usb_devices()
+        elif choice == "8":
+            _hw_i2c_scan()
+        elif choice == "9":
+            _hw_spi_gpio()
+        elif choice == "10":
+            _hw_all()
+
+
+# -----------------------------------------------------------------------
+# Hardware display helpers  (data from modules.hardware)
+# -----------------------------------------------------------------------
+
+def _hw_overview():
+    from modules.hardware import get_monitor
+    d = get_monitor().get_overview()
+    tc = "red" if d.cpu_temp_c >= 80 else "yellow" if d.cpu_temp_c >= 70 else "green"
+    ram_pct  = d.ram_used_mb / d.ram_total_mb * 100 if d.ram_total_mb else 0
+    disk_pct = d.disk_used_gb / d.disk_total_gb * 100 if d.disk_total_gb else 0
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column("K", style="bold cyan", width=22)
+    t.add_column("V", style="white")
+    t.add_row("Model",        d.model)
+    t.add_row("Hostname",     d.hostname)
+    t.add_row("Kernel",       d.kernel)
+    t.add_row("Architecture", d.arch)
+    t.add_row("Uptime",       d.uptime)
+    t.add_row("Load average", d.load)
+    t.add_row("CPU Temp",     f"[{tc}]{d.cpu_temp_c:.1f} °C[/{tc}]")
+    t.add_row("RAM",          f"{d.ram_used_mb} / {d.ram_total_mb} MB  ({ram_pct:.0f}% used)")
+    t.add_row("Storage (/)",  f"{d.disk_used_gb} / {d.disk_total_gb} GB  ({disk_pct:.0f}% used)")
+    console.print(Panel(t, title="System Overview", border_style="magenta"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_temperature():
+    from modules.hardware import get_monitor
+    th = get_monitor().get_thermal()
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column("Sensor", style="bold cyan", width=26)
+    t.add_column("Value",  style="white")
+
+    border = "green"
+    for r in th.readings:
+        c = "red" if r.temp_c >= 80 else "yellow" if r.temp_c >= 70 else "green"
+        if c != "green":
+            border = c
+        t.add_row(r.label, f"[{c}]{r.temp_c:.1f} °C[/{c}]")
+
+    t.add_row("Throttle", th.throttle_raw)
+    if th.throttle_active:
+        t.add_row("", "[red]⚠ CPU is currently throttled![/red]")
+    elif th.throttle_events:
+        t.add_row("", "[yellow]⚠ Throttling has occurred since boot (now recovered)[/yellow]")
+
+    console.print(Panel(t, title="Temperature Sensors", border_style=border))
+    console.print(
+        "[dim]  < 70 °C — Normal  |  70–80 °C — Warm  |  > 80 °C — Hot (throttle risk)[/dim]"
+    )
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_cpu():
+    from modules.hardware import get_monitor
+    cpu = get_monitor().get_cpu()
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column("K", style="bold cyan", width=22)
+    t.add_column("V", style="white")
+    if cpu.hardware:
+        t.add_row("Hardware",   cpu.hardware)
+    if cpu.model_name:
+        t.add_row("Model",      cpu.model_name)
+    if cpu.revision:
+        t.add_row("Revision",   cpu.revision)
+    t.add_row("Cores",          str(cpu.cores))
+    t.add_row("Governor",       cpu.governor)
+    usage_col = "red" if cpu.usage_pct > 90 else "yellow" if cpu.usage_pct > 70 else "green"
+    t.add_row("CPU usage",      f"[{usage_col}]{cpu.usage_pct:.1f} %[/{usage_col}]")
+    for f in cpu.freqs:
+        t.add_row(f"cpu{f.core}",
+                  f"cur {f.cur_mhz} MHz  /  min {f.min_mhz} MHz  /  max {f.max_mhz} MHz")
+    console.print(Panel(t, title="CPU Details", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_memory():
+    from modules.hardware import get_monitor
+    m = get_monitor().get_memory()
+
+    ram_pct  = m.used_mb  / m.total_mb  * 100 if m.total_mb  else 0
+    swap_pct = m.swap_used_mb / m.swap_total_mb * 100 if m.swap_total_mb else 0
+    rc = "red" if ram_pct  > 85 else "yellow" if ram_pct  > 70 else "green"
+    sc = "red" if swap_pct > 50 else "yellow" if swap_pct > 20 else "green"
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column("K", style="bold cyan", width=22)
+    t.add_column("V", style="white")
+    t.add_row("Total RAM",   f"{m.total_mb} MB")
+    t.add_row("Used",        f"[{rc}]{m.used_mb} MB  ({ram_pct:.0f}%)[/{rc}]")
+    t.add_row("Available",   f"{m.available_mb} MB")
+    t.add_row("Free",        f"{m.free_mb} MB")
+    t.add_row("Buffers",     f"{m.buffers_mb} MB")
+    t.add_row("Cached",      f"{m.cached_mb} MB")
+    t.add_row("Swap total",  f"{m.swap_total_mb} MB")
+    t.add_row("Swap used",   f"[{sc}]{m.swap_used_mb} MB  ({swap_pct:.0f}%)[/{sc}]")
+    console.print(Panel(t, title="RAM & Swap", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_storage():
+    from modules.hardware import get_monitor
+    st = get_monitor().get_storage()
+
+    t = Table(show_header=True, header_style="bold cyan", padding=(0, 1))
+    t.add_column("Mount",  style="white", width=20)
+    t.add_column("Device", style="dim",   width=16)
+    t.add_column("FS",     style="dim",   width=8)
+    t.add_column("Total",  style="white", width=8)
+    t.add_column("Used",   style="white", width=8)
+    t.add_column("Free",   style="white", width=8)
+    t.add_column("Usage",  style="white", width=7)
+    for d in st.disks:
+        col = "red" if d.pct > 85 else "yellow" if d.pct > 70 else "green"
+        t.add_row(d.mount, d.device, d.fstype,
+                  d.total, d.used, d.free, f"[{col}]{d.pct}%[/{col}]")
+    console.print(Panel(t, title="Storage Partitions", border_style="cyan"))
+    if st.sd_model:
+        console.print(f"  [dim]SD Card: [white]{st.sd_model}[/white]  {st.sd_size or ''}[/dim]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_network():
+    from modules.hardware import get_monitor
+    net = get_monitor().get_network()
+
+    t = Table(show_header=True, header_style="bold cyan", padding=(0, 1))
+    t.add_column("Interface",  style="white", width=16)
+    t.add_column("State",      style="white", width=8)
+    t.add_column("IP Address", style="white")
+    for ifc in net.interfaces:
+        sc = "green" if "UP" in ifc.state else "red"
+        t.add_row(ifc.name, f"[{sc}]{ifc.state}[/{sc}]", ifc.addresses or "—")
+    console.print(Panel(t, title="Network Interfaces", border_style="cyan"))
+    console.print(f"  [dim]Gateway: [white]{net.gateway}[/white]    DNS: [white]{net.dns}[/white][/dim]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_usb_devices():
+    from modules.hardware import get_monitor
+    usb = get_monitor().get_usb()
+
+    t = Table(show_header=True, header_style="bold cyan", padding=(0, 1))
+    t.add_column("Bus/Dev",     style="dim",    width=10)
+    t.add_column("VID:PID",     style="yellow", width=12)
+    t.add_column("Description", style="white")
+    t.add_column("Board?",      style="green")
+    for dev in usb.devices:
+        t.add_row(dev.bus_dev, dev.vidpid, dev.description, dev.board)
+    console.print(Panel(t, title="USB Devices (lsusb)", border_style="cyan"))
+
+    if usb.serial_ports:
+        console.print(f"  [dim]Serial ports: [white]{',  '.join(usb.serial_ports)}[/white][/dim]")
+    else:
+        console.print("  [dim]Serial ports: none found (/dev/ttyACM* / /dev/ttyUSB*)[/dim]")
+
+    if usb.recognized_boards:
+        console.print("  [bold green]Recognized boards: " + ",  ".join(usb.recognized_boards) + "[/bold green]")
+    else:
+        console.print("  [dim]No known boards detected (check VID:PID above).[/dim]")
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_i2c_scan():
+    from modules.hardware import get_monitor
+    console.print("[cyan]Scanning I2C bus 1 (GPIO2/GPIO3)…[/cyan]")
+    devices = get_monitor().scan_i2c(bus=1)
+
+    if not devices:
+        console.print(Panel(
+            "[dim]No I2C devices found.[/dim]\n"
+            "Check: SDA=GPIO2(pin3), SCL=GPIO3(pin5), 3.3V, pull-up 4.7kΩ",
+            title="I2C Scan", border_style="yellow",
+        ))
+    else:
+        t = Table(show_header=True, header_style="bold cyan", padding=(0, 1))
+        t.add_column("Address",  style="yellow", width=14)
+        t.add_column("Device",   style="white")
+        for dev in devices:
+            t.add_row(f"0x{dev.address:02X}  ({dev.address})", dev.description)
+        console.print(Panel(t, title=f"I2C Scan — {len(devices)} device(s) found",
+                            border_style="green"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_spi_gpio():
+    from modules.hardware import get_monitor
+    ifc = get_monitor().get_interfaces()
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column("K", style="bold cyan", width=26)
+    t.add_column("V", style="white")
+    t.add_row("SPI devices",
+              ", ".join(ifc.spi_devs) if ifc.spi_devs
+              else "[red]None[/red] — enable in raspi-config")
+    t.add_row("SPI0 driver",   ifc.spi0_driver)
+    t.add_row("I2C devices",
+              ", ".join(ifc.i2c_devs) if ifc.i2c_devs
+              else "[red]None[/red] — enable in raspi-config")
+    t.add_row("UART devices",  ", ".join(ifc.uart_devs) if ifc.uart_devs else "N/A")
+    t.add_row("GPIO chips",    ifc.gpio_chips)
+    t.add_row("GPIO lines",    ifc.gpio_lines)
+    if ifc.w1_sensors:
+        t.add_row("1-Wire (DS18B20)",
+                  f"{len(ifc.w1_sensors)} sensor(s): " + ", ".join(ifc.w1_sensors))
+    else:
+        t.add_row("1-Wire", "None found")
+    t.add_row("dtoverlay active", ifc.dtoverlay if ifc.dtoverlay else "N/A")
+    console.print(Panel(t, title="SPI / I2C / GPIO / UART Interfaces", border_style="cyan"))
+    Prompt.ask("Press Enter to continue")
+
+
+def _hw_all():
+    for label, fn in [
+        ("System Overview", _hw_overview),
+        ("Temperature",     _hw_temperature),
+        ("CPU",             _hw_cpu),
+        ("Memory",          _hw_memory),
+        ("Storage",         _hw_storage),
+        ("Network",         _hw_network),
+        ("USB Devices",     _hw_usb_devices),
+        ("I2C Scan",        _hw_i2c_scan),
+        ("SPI/GPIO/UART",   _hw_spi_gpio),
+    ]:
+        console.rule(f"[bold cyan]{label}")
+        fn()
 
 
 # ---------------------------------------------------------------------------
